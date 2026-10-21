@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleIdentifier</key><string>com.interviewdog.independent.system-audio</string>
+<key>CFBundleName</key><string>傻逼面试系统声音</string>
+<key>CFBundleVersion</key><string>1.0.0</string>
+<key>NSAudioCaptureUsageDescription</key><string>用于收听会议播放的面试问题，自动分段转写。</string>
+<key>NSScreenCaptureUsageDescription</key><string>使用系统音频采集接口收听面试问题，不保存屏幕视频。</string>
+</dict></plist>

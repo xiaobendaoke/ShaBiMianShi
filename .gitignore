@@ -1,0 +1,48 @@
+# Dependencies and generated builds
+node_modules/
+/dist/
+/release/
+/resources/system-audio
+coverage/
+*.tsbuildinfo
+
+# Personal backups, documents, runtime databases and encrypted credentials
+.private-backups/
+/private/
+/personal/
+/user-data/
+/storage/
+/backups/
+.env
+.env.*
+!.env.example
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.sqlite-*
+*.sqlite3-*
+*.enc
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Local test runs, provider reports and captured windows
+.test*/
+/test/*.json
+/test/*results*/
+/test/*smoke*/
+/test/*audit*/
+/test/*delivery*/
+/screenshots/
+*.log
+
+# Operating system and editor state
+.DS_Store
+._*
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo

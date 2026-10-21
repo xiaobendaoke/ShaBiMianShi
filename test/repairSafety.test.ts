@@ -1,0 +1,42 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import Database from 'better-sqlite3';
+import {NativeSystemAudio} from '../src/main/services/nativeSystemAudio';
+import {KeyVault} from '../src/main/services/keyVault';
+import {backupUserData} from '../src/main/services/dataBackup';
+import {AppDatabase} from '../src/main/db/database';
+import {verifiedMemoryPatch,memoryContext,recentContext} from '../src/main/services/sessionMemory';
+import {runtimeMismatch,BUILD_ID,IPC_VERSION,SCHEMA_VERSION} from '../src/shared/runtime';
+import {ProviderService} from '../src/main/services/providerService';
+const root=fs.mkdtempSync(path.join(os.tmpdir(),'interviewdog-repair-'));
+const storage={isEncryptionAvailable:()=>true,encryptString:(s:string)=>Buffer.from(s),decryptString:(b:Buffer)=>b.toString()};
+try {
+ const vault=new KeyVault(root,storage);vault.setKey('chat','chat-fixture');vault.setKey('asr','asr-fixture');
+ const before=fs.readFileSync(path.join(root,'vault.enc'));vault.setKey('chat','');assert.deepEqual(fs.readFileSync(path.join(root,'vault.enc')),before);
+ const reload=new KeyVault(root,storage);assert.equal(reload.getKey('asr'),'asr-fixture');reload.setKey('chat','updated');assert.equal(reload.getKey('asr'),'asr-fixture');
+ assert.throws(()=>vault.setKey('vision','stale'),/其他进程/);
+ const locked=new KeyVault(root,{...storage,decryptString:()=>{throw Error('locked')}});const protectedBytes=fs.readFileSync(path.join(root,'vault.enc'));
+ assert.equal(locked.getHealth().state,'locked');assert.throws(()=>locked.setKey('asr','overwrite'),/禁止覆盖/);assert.throws(()=>locked.deleteKey('asr'),/禁止覆盖/);assert.deepEqual(fs.readFileSync(path.join(root,'vault.enc')),protectedBytes);
+ console.log('PASS SS解密失败写保护、空值保留、单条更新保留其他密钥、跨进程写入保护');
+ const raw=new Database(path.join(root,'app_data.db'));raw.pragma('journal_mode=WAL');raw.pragma('wal_autocheckpoint=0');raw.exec('CREATE TABLE original(value TEXT); INSERT INTO original VALUES (\'committed-in-wal\')');
+ const destination=await backupUserData(root,'fixture-build');const snapshot=new Database(path.join(destination!,'app_data.db'),{readonly:true});assert.deepEqual(snapshot.prepare('SELECT * FROM original').all(),[{value:'committed-in-wal'}]);assert.equal(snapshot.pragma('integrity_check',{simple:true}),'ok');snapshot.close();raw.close();assert.deepEqual(fs.readFileSync(path.join(destination!,'vault.enc')),protectedBytes);
+ console.log('PASS SQLite一致快照包含WAL提交，备份加密密钥字节一致');
+ const db=new AppDatabase(path.join(root,'memory.db'));db.saveSession({id:'a',title:'项目A',strategy:'docs_and_general',promptStyle:'concise',libraryIds:[],createdAt:1,updatedAt:1} as any);db.saveSession({id:'b',title:'项目B',strategy:'docs_and_general',promptStyle:'concise',libraryIds:[],createdAt:1,updatedAt:1} as any);
+ const empty=db.getMemory('a');const source={id:'doc1',type:'document' as const,text:'负责Android 12内核配置，整体音频延迟降低40%。'};
+ const patch=verifiedMemoryPatch(empty,{project:'Android',facts:[{sourceId:'doc1',quote:'整体音频延迟降低40%。'},{sourceId:'doc1',quote:'使用dma_heap替代ION。'},{sourceId:'assistant',quote:'独立CMA预留降低40%。'}],working:['可能需要调查CMA争用']},[source],'项目做了什么');assert.equal(patch.entries.filter(e=>e.confirmed).length,1);assert.equal(patch.entries.at(-1)?.confirmed,false);
+ const saved=db.updateMemory(patch,0);assert.throws(()=>db.updateMemory(empty,0),/记忆已更新/);assert.equal(db.getMemory('b').entries.length,0);db.close();const again=new AppDatabase(path.join(root,'memory.db'));assert.equal(again.getMemory('a').revision,saved.revision);
+ const corrected=verifiedMemoryPatch(saved,{project:'Android',facts:[]},[{id:'user-correction',type:'user',text:'更正，降低的是30%，不是40%。'}],'');assert.ok(memoryContext(corrected,'项目怎么样').includes('更正，降低的是30%'));assert.equal(recentContext([{question:'q',answer:'【资料事实】旧推测'} as any])[0].draft,undefined);again.close();
+ console.log('PASS 记忆来源逐字验证、助手推测不确认为事实、CAS拒绝迟到更新、会话隔离、重启持久化、纠正与旧回答隔离');
+ const info={buildId:BUILD_ID,ipcVersion:IPC_VERSION,ready:true,schemaVersion:SCHEMA_VERSION} as any;assert.equal(runtimeMismatch(info,{buildId:BUILD_ID,ipcVersion:IPC_VERSION}),false);assert.equal(runtimeMismatch({...info,buildId:'old'},{buildId:BUILD_ID,ipcVersion:IPC_VERSION}),true);assert.equal(runtimeMismatch({...info,schemaVersion:0},{buildId:BUILD_ID,ipcVersion:IPC_VERSION}),true);
+ console.log('PASS 主进程/预加载/界面/数据库版本握手拒绝旧构建');
+ const helper=path.join(root,'fake-capture');fs.writeFileSync(helper,'#!'+process.execPath+'\nprocess.stderr.write("READY\\n");const b=Buffer.alloc(4800*4);for(let i=0;i<4800;i++)b.writeFloatLE(.12,i*4);process.stdout.write(b);setInterval(()=>{},1000);',{mode:0o700});
+ const native=new NativeSystemAudio();let received:Float32Array|undefined;await native.start(helper,f=>received=f,()=>{},()=>{});await new Promise(r=>setTimeout(r,80));assert.equal(received?.length,1600);assert.ok(Math.abs(received![100]-.12)<.00001);native.stop();
+ const hanging=path.join(root,'hanging-capture');fs.writeFileSync(hanging,'#!'+process.execPath+'\nsetInterval(()=>{},1000)',{mode:0o700});const pending=native.start(hanging,()=>{},()=>{},()=>{});native.stop();await assert.rejects(pending,/已取消/);
+ console.log('PASS 原生采集子进程48000Hz→16000Hz PCM、连接取消、进程清理（协议夹具）');
+ const original=globalThis.fetch;let calls=0,resets=0,answer='',error:any;
+ globalThis.fetch=async()=>new Response(JSON.stringify({choices:[{message:{content:++calls===1?'【资料事实】我负责内核配置[资料1]':'我主要负责 Android 12 内核配置和 RKNPU 驱动使能。'},finish_reason:'stop'}]}),{headers:{'content-type':'application/json'}});
+ try {await new ProviderService({getKey:()=> 'fixture'} as any).streamChat({id:'p',baseUrl:'https://fixture.invalid',modelChat:'fixture',timeoutMs:1000} as any,'你项目负责什么',[],'docs_and_general',[],{onToken:()=>{},onReset:()=>resets++,onComplete:s=>answer=s,onError:e=>error=e});assert.equal(error,undefined);assert.equal(calls,2);assert.equal(resets,1);assert.ok(!answer.includes('[资料'));}finally{globalThis.fetch=original;}
+ console.log('PASS 资料报告输出触发一次完整口语改写，重置草稿');
+}finally{fs.rmSync(root,{recursive:true,force:true});}

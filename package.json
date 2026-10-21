@@ -1,0 +1,81 @@
+{
+  "name": "interviewdog-independent",
+  "productName": "傻逼面试",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "免登录、独立 API、多文档知识库 macOS 面试助手",
+  "main": "dist/main/index.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "test": "tsx test/runAllTests.ts",
+    "test:features": "tsx test/newFeatures.test.ts",
+    "test:all": "tsx test/runAllTests.ts && tsx test/regressionP1.ts && tsx test/regressionRound2.ts && tsx test/newFeatures.test.ts",
+    "bench": "tsx test/scaleBenchmark.ts",
+    "pack": "node scripts/pack-mac.js",
+    "dist": "electron-builder",
+    "test:production": "node --import tsx test/productionRegression.ts",
+    "test:interview": "tsx test/interviewWorkflow.test.ts",
+    "test:repair": "node --import tsx test/repairSafety.test.ts && node --import tsx test/interviewWorkflow.test.ts && node --import tsx test/productionRegression.ts",
+    "dmg": "node scripts/create-dmg.js"
+  },
+  "build": {
+    "appId": "com.interviewdog.independent",
+    "productName": "傻逼面试",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "package.json",
+      "resources/**/*"
+    ],
+    "mac": {
+      "target": [
+        "dir"
+      ],
+      "category": "public.app-category.productivity",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "用于持续收听面试问题并自动转写。",
+        "NSAudioCaptureUsageDescription": "用于转写会议播放的面试问题。",
+        "NSScreenCaptureUsageDescription": "用于选区截图识别编程题。"
+      }
+    }
+  },
+  "keywords": [
+    "interview-copilot",
+    "knowledge-base",
+    "electron",
+    "rag"
+  ],
+  "author": "Independent",
+  "license": "MIT",
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.3.3",
+    "@types/node": "^26.6.5",
+    "@types/pdf-parse": "^1.1.5",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "autoprefixer": "^10.6.1",
+    "electron": "^44.9.0",
+    "electron-builder": "^26.15.3",
+    "lucide-react": "^1.59.0",
+    "postcss": "^8.5.31",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "tailwindcss": "^4.3.3",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.4",
+    "vite-plugin-electron": "^1.1.2",
+    "vite-plugin-electron-renderer": "^1.0.0",
+    "esbuild": "0.28.2"
+  },
+  "dependencies": {
+    "@types/better-sqlite3": "^9.6.0",
+    "better-sqlite3": "^13.0.3",
+    "mammoth": "^1.13.0",
+    "pdf-parse": "^2.4.5"
+  }
+}
