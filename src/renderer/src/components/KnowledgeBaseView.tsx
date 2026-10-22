@@ -8,12 +8,13 @@ import {
   FileText,
   AlertCircle,
   CheckCircle2,
-  Clock,
   Sparkles,
   RefreshCw,
-  SlidersHorizontal
+  SlidersHorizontal,
+  BookOpen
 } from 'lucide-react';
-import { Library, DocumentRecord, RetrievalResult, RetrievalResultItem } from '../../../main/types';
+import { Library, DocumentRecord, RetrievalResult } from '../../../main/types';
+import { Badge, EmptyState, PageHeader, Segmented, Toolbar, button, cx, field } from './ui';
 
 interface KnowledgeBaseViewProps {
   libraries: Library[];
@@ -21,6 +22,8 @@ interface KnowledgeBaseViewProps {
   onSelectLibrary: (lib: Library) => void;
   onRefreshLibraries: () => void;
 }
+
+const formatSize = (bytes: number) => bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${(bytes / 1024).toFixed(1)} KB`;
 
 export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
   libraries,
@@ -34,6 +37,9 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
   const [retrievalResult, setRetrievalResult] = useState<RetrievalResult | null>(null);
   const [isSearching, setIsSearching] = useState(false);
   const [ingestionStats, setIngestionStats] = useState<any>({ total: 0, completed: 0, processing: 0, failed: 0 });
+  const [importingPreset, setImportingPreset] = useState(false);
+  // window.prompt is unavailable in Electron, so new libraries are named inline.
+  const [newLibraryName, setNewLibraryName] = useState<string | null>(null);
 
   const loadDocuments = () => {
     if (currentLibrary) {
@@ -65,8 +71,6 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
     await (window as any).api.selectAndImportFolder(currentLibrary.id);
   };
 
-  const [importingPreset, setImportingPreset] = useState(false);
-
   const handleImportPreset = async () => {
     if (!currentLibrary) return;
     setImportingPreset(true);
@@ -88,8 +92,7 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
     }
   };
 
-  const handleCreateLibrary = async () => {
-    const name = prompt('请输入新知识库名称：', '项目与技术笔记');
+  const handleCreateLibrary = async (name: string) => {
     if (name && name.trim()) {
       const newLib: Library = {
         id: `lib_${Date.now()}`,
@@ -100,6 +103,7 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
         updatedAt: Date.now()
       };
       await (window as any).api.saveLibrary(newLib);
+      setNewLibraryName(null);
       onRefreshLibraries();
     }
   };
@@ -121,294 +125,202 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
     }
   };
 
-  return (
-    <div className="flex-1 flex overflow-hidden bg-gray-900">
-      {/* Left: Libraries List */}
-      <div className="w-64 border-r border-gray-800 bg-gray-950/70 p-4 flex flex-col justify-between shrink-0">
-        <div className="space-y-3">
-          <div className="flex items-center justify-between pb-2 border-b border-gray-800">
-            <span className="text-xs font-semibold text-gray-300">知识库列表</span>
-            <button
-              onClick={handleCreateLibrary}
-              className="p-1 rounded hover:bg-gray-800 text-gray-400 hover:text-emerald-400 transition-colors"
-              title="新建知识库"
-            >
-              <Plus size={16} />
-            </button>
-          </div>
+  const statusCell = (doc: DocumentRecord) => {
+    if (doc.status === 'ready') return <Badge tone="success"><CheckCircle2 size={11} />已就绪</Badge>;
+    if (doc.status === 'parsing' || doc.status === 'indexing') return <Badge tone="accent"><RefreshCw size={11} className="animate-spin" />{doc.status === 'parsing' ? '解析中' : '索引中'}</Badge>;
+    if (doc.status === 'keyword_only') return <Badge tone="warning" title={doc.errorMsg || ''}>{doc.needsOcr ? '需 OCR' : '仅关键词 · 可重建向量'}</Badge>;
+    if (doc.status === 'failed') return <Badge tone="danger" title={doc.errorMsg || ''}><AlertCircle size={11} />失败</Badge>;
+    return <Badge>{doc.status}</Badge>;
+  };
 
-          <div className="space-y-1">
-            {libraries.map(lib => (
-              <button
-                key={lib.id}
-                onClick={() => onSelectLibrary(lib)}
-                className={`w-full text-left px-3 py-2.5 rounded-lg text-xs font-medium transition-all flex items-center justify-between ${
-                  currentLibrary?.id === lib.id
-                    ? 'bg-emerald-950/40 border border-emerald-700/60 text-emerald-300'
-                    : 'text-gray-400 hover:text-gray-200 hover:bg-gray-900 border border-transparent'
-                }`}
-              >
-                <span className="truncate">{lib.name}</span>
-                <span className="text-[10px] bg-gray-800 px-1.5 py-0.5 rounded text-gray-400">
-                  {lib.docCount || 0}
-                </span>
+  return (
+    <div className="flex-1 flex min-w-0 overflow-hidden aurora">
+      {/* Libraries */}
+      <aside className="w-[232px] shrink-0 border-r border-separator flex flex-col min-h-0 glass">
+        <Toolbar className="justify-between pr-2">
+          <span className="text-[13px] font-semibold text-label">知识库列表</span>
+          <button onClick={() => setNewLibraryName('项目与技术笔记')} className={button.icon} title="新建知识库">
+            <Plus size={16} strokeWidth={1.75} />
+          </button>
+        </Toolbar>
+
+        <div className="flex-1 overflow-y-auto p-2 space-y-px">
+          {newLibraryName !== null && (
+            <form className="mb-2 rounded-xl bg-elevated shadow-card p-2.5 space-y-2 animate-fade-up" onSubmit={e => { e.preventDefault(); void handleCreateLibrary(newLibraryName); }}>
+              <div className="text-[11px] font-medium text-label-2 px-0.5">请输入新知识库名称</div>
+              <input autoFocus aria-label="新知识库名称" value={newLibraryName} onChange={e => setNewLibraryName(e.target.value)} onFocus={e => e.target.select()} onKeyDown={e => { if (e.key === 'Escape') setNewLibraryName(null); }} className={field} />
+              <div className="flex justify-end gap-1.5">
+                <button type="button" onClick={() => setNewLibraryName(null)} className={cx(button.plain, 'h-7 text-[12px]')}>取消</button>
+                <button disabled={!newLibraryName.trim()} className={cx(button.primary, 'h-7 px-3 text-[12px]')}>创建</button>
+              </div>
+            </form>
+          )}
+          {libraries.map(lib => {
+            const active = currentLibrary?.id === lib.id;
+            return (
+              <button key={lib.id} onClick={() => onSelectLibrary(lib)} className={cx('w-full flex items-center gap-2.5 h-8 px-2.5 rounded-lg text-[13px] transition-colors', active ? 'bg-accent-soft text-label font-medium' : 'text-label hover:bg-fill')}>
+                <BookOpen size={15} strokeWidth={1.75} className={active ? 'text-accent' : 'text-label-3'} />
+                <span className="truncate flex-1 text-left">{lib.name}</span>
+                <span className="text-[11px] text-label-3 tabular-nums">{lib.docCount || 0}</span>
               </button>
-            ))}
-          </div>
+            );
+          })}
         </div>
 
         {/* Ingestion Queue Mini Status */}
         {ingestionStats.processing > 0 && (
-          <div className="p-3 bg-gray-900 border border-emerald-800/40 rounded-lg text-xs space-y-1">
-            <div className="flex items-center space-x-1.5 text-emerald-400 font-medium">
+          <div className="m-2 rounded-xl bg-accent-soft px-3 py-2.5 text-[12px] space-y-0.5">
+            <div className="flex items-center gap-1.5 text-accent-text font-medium">
               <RefreshCw size={12} className="animate-spin" />
               <span>文档导入中...</span>
             </div>
-            <div className="text-[11px] text-gray-400">
-              处理中: {ingestionStats.processing} · 队列: {ingestionStats.queued}
-            </div>
+            <div className="text-[11px] text-label-2">处理中: {ingestionStats.processing} · 队列: {ingestionStats.queued}</div>
           </div>
         )}
-      </div>
+      </aside>
 
       {/* Main Content Area */}
-      <div className="flex-1 flex flex-col overflow-hidden bg-gray-900 p-6 space-y-4">
-        {/* Top Header & Sub-Tabs */}
-        <div className="flex items-center justify-between pb-3 border-b border-gray-800">
-          <div className="flex items-center space-x-4">
-            <h2 className="text-sm font-semibold text-gray-100 flex items-center space-x-2">
-              <span>{currentLibrary?.name || '知识库'}</span>
-            </h2>
+      <div className="flex-1 min-w-0 flex flex-col">
+        <Toolbar className="justify-center">
+          <Segmented
+            value={activeSubTab}
+            onChange={setActiveSubTab}
+            options={[
+              {id: 'docs', label: `文档管理 (${documents.length})`},
+              {id: 'search_test', label: '检索测试 (混合召回诊断)'}
+            ]}
+          />
+        </Toolbar>
 
-            <div className="flex items-center space-x-1 bg-gray-950 p-1 rounded-lg border border-gray-800">
-              <button
-                onClick={() => setActiveSubTab('docs')}
-                className={`px-3 py-1 rounded text-xs transition-colors ${
-                  activeSubTab === 'docs' ? 'bg-emerald-600 text-white font-medium' : 'text-gray-400 hover:text-gray-200'
-                }`}
-              >
-                文档管理 ({documents.length})
-              </button>
-              <button
-                onClick={() => setActiveSubTab('search_test')}
-                className={`px-3 py-1 rounded text-xs transition-colors ${
-                  activeSubTab === 'search_test' ? 'bg-emerald-600 text-white font-medium' : 'text-gray-400 hover:text-gray-200'
-                }`}
-              >
-                检索测试 (混合召回诊断)
-              </button>
-            </div>
-          </div>
+        <div className="flex-1 overflow-y-auto">
+          <div className="max-w-[1000px] mx-auto px-10 pt-9 pb-12">
+            <PageHeader title={currentLibrary?.name || '知识库'} subtitle={activeSubTab === 'docs' ? '导入 PDF、DOCX、Markdown、TXT。等待文档状态变成“已就绪”后，即可在面试中引用。' : '在此输入查询词，可直观诊断关键词与向量的召回排序、RRF 融合分与原文片段'}>
+              {activeSubTab === 'docs' && <>
+                <button onClick={handleImportPreset} disabled={importingPreset} className={button.secondary} title="导入系统内置的大厂高频技术面试真题（高并发、微服务、MySQL、Redis、前端与算法）">
+                  <Sparkles size={14} className={importingPreset ? 'animate-spin' : ''} />
+                  <span>{importingPreset ? '正在导入真题库...' : '导入大厂高频真题'}</span>
+                </button>
+                <button onClick={handleImportFolder} className={button.secondary}>
+                  <FolderPlus size={14} />
+                  <span>导入文件夹</span>
+                </button>
+                <button onClick={handleImportFiles} className={button.primary}>
+                  <FilePlus size={14} />
+                  <span>批量选择文件</span>
+                </button>
+              </>}
+            </PageHeader>
 
-          {activeSubTab === 'docs' && (
-            <div className="flex items-center space-x-2">
-              <button
-                onClick={handleImportPreset}
-                disabled={importingPreset}
-                className="flex items-center space-x-1.5 px-3 py-1.5 bg-amber-950/60 hover:bg-amber-900/80 text-amber-300 border border-amber-700/60 rounded-md text-xs font-medium transition-colors"
-                title="导入系统内置的大厂高频技术面试真题（高并发、微服务、MySQL、Redis、前端与算法）"
-              >
-                <Sparkles size={14} className={importingPreset ? "animate-spin text-amber-400" : "text-amber-400"} />
-                <span>{importingPreset ? '正在导入真题库...' : '导入大厂高频真题'}</span>
-              </button>
-              <button
-                onClick={handleImportFiles}
-                className="flex items-center space-x-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-md text-xs font-medium transition-colors"
-              >
-                <FilePlus size={14} />
-                <span>批量选择文件</span>
-              </button>
-              <button
-                onClick={handleImportFolder}
-                className="flex items-center space-x-1.5 px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-gray-200 border border-gray-700 rounded-md text-xs font-medium transition-colors"
-              >
-                <FolderPlus size={14} />
-                <span>导入文件夹</span>
-              </button>
-            </div>
-          )}
-        </div>
-
-        {/* TAB 1: Document Table */}
-        {activeSubTab === 'docs' && (
-          <div className="flex-1 overflow-y-auto">
-            {documents.length === 0 ? (
-              <div className="h-64 flex flex-col items-center justify-center border-2 border-dashed border-gray-800 rounded-xl p-8 text-center space-y-3">
-                <FileText size={32} className="text-gray-600" />
-                <div className="text-xs text-gray-400">
-                  当前知识库暂无文档。可一键导入预置大厂真题库，或导入你的自定义技术资料。
-                </div>
-                <div className="flex items-center space-x-3">
-                  <button
-                    onClick={handleImportPreset}
-                    disabled={importingPreset}
-                    className="px-4 py-2 bg-amber-950/70 hover:bg-amber-900/90 border border-amber-600/70 text-amber-300 rounded-lg text-xs flex items-center space-x-1.5 transition-colors"
-                  >
-                    <Sparkles size={13} />
-                    <span>一键导入大厂高频真题库</span>
-                  </button>
-                  <button
-                    onClick={handleImportFiles}
-                    className="px-4 py-2 bg-emerald-600/30 hover:bg-emerald-600/50 border border-emerald-500/40 text-emerald-300 rounded-lg text-xs"
-                  >
-                    导入自选文件
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div className="border border-gray-800 rounded-xl overflow-hidden bg-gray-950/40">
-                <table className="w-full text-left text-xs">
-                  <thead className="bg-gray-950/90 text-gray-400 border-b border-gray-800 text-[11px]">
-                    <tr>
-                      <th className="py-2.5 px-4 font-medium">文档名称</th>
-                      <th className="py-2.5 px-3 font-medium">格式</th>
-                      <th className="py-2.5 px-3 font-medium">大小</th>
-                      <th className="py-2.5 px-3 font-medium">页数/段落</th>
-                      <th className="py-2.5 px-3 font-medium">状态</th>
-                      <th className="py-2.5 px-3 font-medium">更新时间</th>
-                      <th className="py-2.5 px-3 font-medium text-right">操作</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-800/60">
-                    {documents.map(doc => (
-                      <tr key={doc.id} className="hover:bg-gray-900/50 transition-colors">
-                        <td className="py-3 px-4 font-medium text-gray-200 flex items-center space-x-2">
-                          <FileText size={14} className="text-gray-400 shrink-0" />
-                          <span className="truncate max-w-xs">{doc.fileName}</span>
-                          {doc.needsOcr && (
-                            <span className="px-1.5 py-0.5 rounded text-[9px] bg-amber-950 border border-amber-800 text-amber-400 font-medium">
-                              待 OCR
-                            </span>
-                          )}
-                        </td>
-                        <td className="py-3 px-3 uppercase text-gray-400">{doc.fileType}</td>
-                        <td className="py-3 px-3 text-gray-400">
-                          {(doc.fileSize / 1024).toFixed(1)} KB
-                        </td>
-                        <td className="py-3 px-3 text-gray-400">
-                          {doc.pageCount ? `${doc.pageCount} 页` : '-'}
-                        </td>
-                        <td className="py-3 px-3">
-                          {doc.status === 'ready' && (
-                            <span className="inline-flex items-center space-x-1 text-emerald-400">
-                              <CheckCircle2 size={13} />
-                              <span>已就绪</span>
-                            </span>
-                          )}
-                          {(doc.status === 'parsing' || doc.status === 'indexing') && (
-                            <span className="inline-flex items-center space-x-1 text-amber-400">
-                              <RefreshCw size={13} className="animate-spin" />
-                              <span>{doc.status === 'parsing' ? '解析中' : '索引中'}</span>
-                            </span>
-                          )}
-                          {doc.status === 'keyword_only' && (
-                            <span className="text-amber-400" title={doc.errorMsg || ''}>
-                              {doc.needsOcr ? '需 OCR' : '仅关键词 · 可重建向量'}
-                            </span>
-                          )}
-                          {doc.status === 'failed' && (
-                            <span className="inline-flex items-center space-x-1 text-red-400" title={doc.errorMsg || ''}>
-                              <AlertCircle size={13} />
-                              <span>失败</span>
-                            </span>
-                          )}
-                        </td>
-                        <td className="py-3 px-3 text-gray-500">
-                          {new Date(doc.updatedAt).toLocaleDateString()}
-                        </td>
-                        <td className="py-3 px-3 text-right">
-                          <button
-                            onClick={() => handleDeleteDoc(doc.id)}
-                            className="p-1 hover:text-red-400 text-gray-500 transition-colors"
-                            title="删除文档"
-                          >
-                            <Trash2 size={14} />
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* TAB 2: Search Testing & Diagnostics */}
-        {activeSubTab === 'search_test' && (
-          <div className="flex-1 flex flex-col overflow-hidden space-y-4">
-            <div className="flex items-center space-x-2">
-              <div className="relative flex-1">
-                <Search size={14} className="absolute left-3 top-3 text-gray-500" />
-                <input
-                  type="text"
-                  value={searchQuery}
-                  onChange={e => setSearchQuery(e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && handleTestSearch()}
-                  placeholder="输入检索测试问题，如：订单重复提交怎么解决？"
-                  className="w-full bg-gray-950 border border-gray-700 rounded-lg pl-9 pr-3 py-2 text-xs text-gray-100 placeholder-gray-500 focus:outline-none focus:border-emerald-500"
-                />
-              </div>
-              <button
-                onClick={handleTestSearch}
-                disabled={isSearching || !searchQuery.trim()}
-                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-lg text-xs font-medium transition-colors"
-              >
-                {isSearching ? '检索中...' : '开始测试检索'}
-              </button>
-            </div>
-
-            {/* Results Display */}
-            <div className="flex-1 overflow-y-auto space-y-3 pr-2">
-              {retrievalResult ? (
-                <>
-                  <div className="flex items-center justify-between text-xs text-gray-400 px-1">
-                    <span>
-                      检索耗时: <strong className="text-emerald-400">{retrievalResult.latencyMs} ms</strong> · 候选召回: {retrievalResult.totalCandidates} 条 · 最终选取: {retrievalResult.items.length} 条
-                    </span>
-                  </div>
-
-                  {retrievalResult.items.length === 0 ? (
-                    <div className="p-8 text-center text-xs text-gray-500 border border-dashed border-gray-800 rounded-xl">
-                      未命中任何相关资料片段
+            {/* Documents */}
+            {activeSubTab === 'docs' && (
+              documents.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-separator">
+                  <EmptyState icon={<FileText size={36} strokeWidth={1.25} />} title="当前知识库暂无文档">
+                    可一键导入预置大厂真题库，或导入你的自定义技术资料。
+                    <div className="mt-5 flex justify-center gap-2">
+                      <button onClick={handleImportPreset} disabled={importingPreset} className={button.secondary}>
+                        <Sparkles size={14} />
+                        <span>一键导入大厂高频真题库</span>
+                      </button>
+                      <button onClick={handleImportFiles} className={button.primary}>导入自选文件</button>
                     </div>
-                  ) : (
-                    retrievalResult.items.map((item, idx) => (
-                      <div
-                        key={item.chunkId}
-                        className="p-4 bg-gray-950 border border-gray-800 rounded-xl space-y-2 hover:border-gray-700 transition-colors"
-                      >
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center space-x-2">
-                            <span className="px-2 py-0.5 rounded text-[10px] bg-emerald-950 border border-emerald-800 text-emerald-400 font-bold">
-                              #{idx + 1} RRF 分数: {item.rrfScore.toFixed(4)}
-                            </span>
-                            <span className="text-xs font-semibold text-gray-200">{item.fileName}</span>
-                            <span className="text-[11px] text-gray-500">{item.sectionPath}</span>
-                          </div>
+                  </EmptyState>
+                </div>
+              ) : (
+                <div className="rounded-2xl bg-surface shadow-card overflow-hidden">
+                  <table className="w-full text-left text-[13px] whitespace-nowrap">
+                    <thead className="text-[11px] text-label-3">
+                      <tr className="border-b border-separator">
+                        <th className="h-9 pl-4 pr-3 font-medium">文档名称</th>
+                        <th className="h-9 px-3 font-medium">格式</th>
+                        <th className="h-9 px-3 font-medium">大小</th>
+                        <th className="h-9 px-3 font-medium">页数/段落</th>
+                        <th className="h-9 px-3 font-medium">状态</th>
+                        <th className="h-9 px-3 font-medium">更新时间</th>
+                        <th className="h-9 pl-3 pr-4 font-medium text-right sr-only">操作</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-separator">
+                      {documents.map(doc => (
+                        <tr key={doc.id} className="group hover:bg-fill transition-colors">
+                          <td className="h-11 pl-4 pr-3">
+                            <div className="flex items-center gap-2.5 min-w-0">
+                              <FileText size={15} strokeWidth={1.75} className="text-accent shrink-0" />
+                              <span className="truncate max-w-[300px] text-label" title={doc.fileName}>{doc.fileName}</span>
+                              {doc.needsOcr && <Badge tone="warning">待 OCR</Badge>}
+                            </div>
+                          </td>
+                          <td className="px-3 uppercase text-[12px] text-label-2">{doc.fileType}</td>
+                          <td className="px-3 text-[12px] text-label-2 tabular-nums">{formatSize(doc.fileSize)}</td>
+                          <td className="px-3 text-[12px] text-label-2">{doc.pageCount ? `${doc.pageCount} 页` : '-'}</td>
+                          <td className="px-3">{statusCell(doc)}</td>
+                          <td className="px-3 text-[12px] text-label-3">{new Date(doc.updatedAt).toLocaleDateString()}</td>
+                          <td className="pl-3 pr-3 text-right">
+                            <button onClick={() => handleDeleteDoc(doc.id)} className={cx(button.icon, 'opacity-0 group-hover:opacity-100 focus:opacity-100 hover:text-danger')} title="删除文档">
+                              <Trash2 size={14} />
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )
+            )}
 
-                          <div className="text-[10px] space-x-3 text-gray-400">
+            {/* Search Testing & Diagnostics */}
+            {activeSubTab === 'search_test' && (
+              <div className="space-y-5">
+                <div className="flex items-center gap-2">
+                  <div className="relative flex-1">
+                    <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-label-3 pointer-events-none" />
+                    <input
+                      type="text"
+                      value={searchQuery}
+                      onChange={e => setSearchQuery(e.target.value)}
+                      onKeyDown={e => e.key === 'Enter' && !e.nativeEvent.isComposing && handleTestSearch()}
+                      placeholder="输入检索测试问题，如：订单重复提交怎么解决？"
+                      className={cx(field, 'h-10 pl-10 text-[14px] rounded-xl')}
+                    />
+                  </div>
+                  <button onClick={handleTestSearch} disabled={isSearching || !searchQuery.trim()} className={cx(button.primary, 'h-10 px-5 rounded-xl')}>
+                    {isSearching ? '检索中...' : '开始测试检索'}
+                  </button>
+                </div>
+
+                {retrievalResult ? (
+                  <div className="space-y-3">
+                    <div className="text-[12px] text-label-2 px-1">
+                      检索耗时: <strong className="text-label font-semibold">{retrievalResult.latencyMs} ms</strong> · 候选召回: {retrievalResult.totalCandidates} 条 · 最终选取: {retrievalResult.items.length} 条
+                    </div>
+                    {retrievalResult.items.length === 0 ? (
+                      <div className="rounded-2xl border border-dashed border-separator"><EmptyState title="未命中任何相关资料片段" /></div>
+                    ) : retrievalResult.items.map((item, idx) => (
+                      <div key={item.chunkId} className="rounded-2xl bg-surface shadow-card p-4 space-y-2.5">
+                        <div className="flex items-center justify-between gap-3 flex-wrap">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <Badge tone="accent">#{idx + 1} RRF 分数: {item.rrfScore.toFixed(4)}</Badge>
+                            <span className="text-[13px] font-medium text-label truncate">{item.fileName}</span>
+                            <span className="text-[12px] text-label-3 truncate">{item.sectionPath}</span>
+                          </div>
+                          <div className="text-[11px] text-label-2 flex gap-3 tabular-nums">
                             <span>关键词 (BM25): {item.keywordScore.toFixed(2)} (排名: #{item.keywordRank || '-'})</span>
                             <span>向量相似度: {item.vectorScore.toFixed(3)} (排名: #{item.vectorRank || '-'})</span>
                           </div>
                         </div>
-
-                        <div className="text-xs text-gray-300 bg-gray-900/80 p-3 rounded-lg border border-gray-800/80 leading-relaxed whitespace-pre-wrap">
-                          {item.text}
-                        </div>
+                        <div className="text-[13px] leading-relaxed text-label-2 whitespace-pre-wrap select-text">{item.text}</div>
                       </div>
-                    ))
-                  )}
-                </>
-              ) : (
-                <div className="h-64 flex flex-col items-center justify-center text-center text-xs text-gray-500 space-y-2">
-                  <SlidersHorizontal size={24} className="text-gray-600" />
-                  <div>在此输入查询词，可直观诊断关键词与向量的召回排序、RRF 融合分与原文片段</div>
-                </div>
-              )}
-            </div>
+                    ))}
+                  </div>
+                ) : (
+                  <EmptyState icon={<SlidersHorizontal size={30} strokeWidth={1.25} />} title="检索测试">
+                    输入一个面试问题，查看哪些资料片段会被召回、排序依据是什么。
+                  </EmptyState>
+                )}
+              </div>
+            )}
           </div>
-        )}
+        </div>
       </div>
     </div>
   );

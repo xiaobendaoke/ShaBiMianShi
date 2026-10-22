@@ -1,28 +1,24 @@
 import React, { useState, useEffect } from 'react';
 import {
-  Key,
-  Globe,
-  Cpu,
+  KeyRound,
   CheckCircle2,
   AlertCircle,
-  ToggleLeft,
-  ToggleRight,
   Server,
   Zap,
   RefreshCw,
-  Sparkles,
   Eye,
   EyeOff,
   Copy,
-  Check,
   MessageSquare,
   Database,
   Mic,
   Save,
   ShieldCheck,
-  ArrowRight
+  Image as ImageIcon,
+  X
 } from 'lucide-react';
 import { ProviderRole, RoleModelConfig } from '../../../main/types';
+import { Badge, Group, Notice, PageHeader, Row, Switch, Toolbar, button, cx, field, fieldBox, selectField } from './ui';
 
 type ConfigRole = Exclude<ProviderRole, 'vision'>;
 const CONFIG_ROLES: ConfigRole[] = ['chat', 'asr', 'embed'];
@@ -45,9 +41,7 @@ const ROLE_METADATA: Record<ConfigRole, {
   tag: string;
   subtitle: string;
   icon: React.ElementType;
-  color: string;
-  borderColor: string;
-  accentBg: string;
+  tile: string;
   presets: Array<{ label: string; baseUrl: string; model: string }>;
 }> = {
   chat: {
@@ -55,9 +49,7 @@ const ROLE_METADATA: Record<ConfigRole, {
     tag: 'Chat',
     subtitle: '请配置支持图片输入的多模态模型，统一处理文字问答、截图解题和代码',
     icon: MessageSquare,
-    color: 'text-emerald-400',
-    borderColor: 'border-emerald-500/30 hover:border-emerald-500/50',
-    accentBg: 'bg-emerald-950/30',
+    tile: 'from-[#5ac8fa] to-[#0071e3]',
     presets: [
       { label: 'DeepSeek 官方', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-flash' },
       { label: 'Gemini (Google)', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', model: 'gemini-1.5-flash' },
@@ -72,9 +64,7 @@ const ROLE_METADATA: Record<ConfigRole, {
     tag: 'Embedding',
     subtitle: '负责将文档分片与搜索提问转化为高维向量，用于语义混合召回',
     icon: Database,
-    color: 'text-cyan-400',
-    borderColor: 'border-cyan-500/30 hover:border-cyan-500/50',
-    accentBg: 'bg-cyan-950/30',
+    tile: 'from-[#64d2ff] to-[#30b0c7]',
     presets: [
       { label: '硅基流动 (BGE-M3 推荐)', baseUrl: 'https://api.siliconflow.cn/v1', model: 'BAAI/bge-m3' },
       { label: 'OpenAI 官方', baseUrl: 'https://api.openai.com/v1', model: 'text-embedding-3-small' },
@@ -88,9 +78,7 @@ const ROLE_METADATA: Record<ConfigRole, {
     tag: 'ASR',
     subtitle: '持续收音，自动分段上传并返回文本；不是逐字流式字幕',
     icon: Mic,
-    color: 'text-amber-400',
-    borderColor: 'border-amber-500/30 hover:border-amber-500/50',
-    accentBg: 'bg-amber-950/30',
+    tile: 'from-[#ffb340] to-[#ff9500]',
     presets: [
       { label: 'OpenAI 官方', baseUrl: 'https://api.openai.com/v1', model: 'whisper-1' },
       { label: 'Groq 高速 Whisper', baseUrl: 'https://api.groq.com/openai/v1', model: 'whisper-large-v3' },
@@ -290,265 +278,132 @@ export const ModelConfigView: React.FC = () => {
     setMockRunning(res);
   };
 
+  const inputRowField = cx(field, 'h-7 font-mono text-[12px] max-w-[360px]');
+
   return (
-    <div className="flex-1 flex flex-col overflow-y-auto bg-gray-900 text-gray-100 p-6 space-y-6">
-      {/* Header bar */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between pb-4 border-b border-gray-800 gap-4">
-        <div>
-          <div className="flex items-center space-x-2">
-            <h1 className="text-base font-bold text-gray-100">问答模型与语音服务</h1>
-            <span className="px-2 py-0.5 text-[11px] font-semibold bg-emerald-950/80 text-emerald-400 border border-emerald-700/60 rounded-full">
-              文字与图片共用多模态模型
-            </span>
-          </div>
-          <p className="text-xs text-gray-400 mt-1">
-            只需配置一个支持图片输入的多模态问答模型；ASR与向量服务独立配置。
-          </p>
-        </div>
-
-        <div className="flex items-center space-x-3 shrink-0">
-          {/* Mock Server toggle */}
-          <div className="flex items-center space-x-2 px-3 py-1.5 bg-gray-950/80 border border-gray-800 rounded-lg text-xs">
-            <Server size={14} className={mockRunning ? 'text-emerald-400' : 'text-gray-500'} />
-            <span className="text-gray-400">离线模拟服务 (52140):</span>
-            <button onClick={handleToggleMock} className="text-gray-400 hover:text-gray-200">
-              {mockRunning ? <ToggleRight size={20} className="text-emerald-400" /> : <ToggleLeft size={20} />}
+    <div className="flex-1 min-w-0 flex flex-col aurora">
+      <Toolbar />
+      <div className="flex-1 overflow-y-auto">
+        <div className="max-w-[760px] mx-auto px-10 pt-9 pb-14 space-y-8">
+          <PageHeader title="问答模型与语音服务" subtitle="只需配置一个支持图片输入的多模态问答模型；ASR与向量服务独立配置。">
+            <button onClick={handleSaveAll} disabled={savingAll || loading} className={button.primary}>
+              <Save size={14} />
+              <span>{savingAll ? '正在保存全部...' : '全部保存'}</span>
             </button>
-          </div>
+          </PageHeader>
 
-          <button
-            onClick={handleSaveAll}
-            disabled={savingAll || loading}
-            className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white rounded-lg text-xs font-semibold transition-all flex items-center space-x-1.5 shadow-md shadow-emerald-950/30 disabled:opacity-50"
-          >
-            <Save size={14} />
-            <span>{savingAll ? '正在保存全部...' : '全部保存'}</span>
-          </button>
-        </div>
-      </div>
-
-      {/* Sync Toast Feedback Banner */}
-      {syncToast && (
-        <div className="bg-emerald-950/80 border border-emerald-700 text-emerald-300 px-4 py-2.5 rounded-lg text-xs flex items-center justify-between shadow-lg animate-in fade-in duration-200">
-          <div className="flex items-center space-x-2">
-            <CheckCircle2 size={16} className="text-emerald-400 shrink-0" />
-            <span>{syncToast}</span>
-          </div>
-          <button onClick={() => setSyncToast(null)} className="text-emerald-400 hover:text-emerald-200 text-xs ml-4">
-            ✕
-          </button>
-        </div>
-      )}
-
-      {/* Quick sync tip banner */}
-      <div className="p-3 bg-gray-950/60 border border-gray-800 rounded-lg text-xs flex items-center justify-between text-gray-400">
-        <div className="flex items-center space-x-2">
-          <Sparkles size={14} className="text-amber-400 shrink-0" />
-          <span>
-            <strong className="text-gray-200">全功能中转站用户提示：</strong>
-            如果您使用 OpenAI 官方或一体化 API 聚合转发平台，可在任意卡片中填好后点击「⚡ 同步当前 URL & Key 至全部模型」，一键免除重复粘贴。
-          </span>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-        {CONFIG_ROLES.map(rawRole => {
-          const role = rawRole;
-          const meta = ROLE_METADATA[role];
-          const state = roleStates[role];
-          const Icon = meta.icon;
-
-          return (
-            <div
-              key={role}
-              className={`bg-gray-950/80 border ${meta.borderColor} rounded-xl p-5 flex flex-col justify-between space-y-4 transition-all shadow-sm`}
-            >
-              {/* Card Header */}
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center space-x-2.5">
-                    <div className={`p-2 rounded-lg ${meta.accentBg} ${meta.color}`}>
-                      <Icon size={18} />
-                    </div>
-                    <div>
-                      <div className="flex items-center space-x-2">
-                        <h2 className="text-sm font-bold text-gray-100">{meta.title}</h2>
-                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold ${meta.accentBg} ${meta.color}`}>
-                          {meta.tag}
-                        </span>
-                      </div>
-                      <p className="text-[11px] text-gray-400 mt-0.5 leading-snug">{meta.subtitle}</p>
-                    </div>
-                  </div>
-
-                  {/* Keychain status pill */}
-                  <div className="flex items-center space-x-1 shrink-0">
-                    {state.hasKey ? (
-                      <span className="flex items-center space-x-1 text-[11px] text-emerald-400 bg-emerald-950/70 border border-emerald-800/80 px-2 py-0.5 rounded-full font-medium" title="密钥由系统加密存储保护">
-                        <ShieldCheck size={12} />
-                        <span>已配置密钥</span>
-                      </span>
-                    ) : (
-                      <span className="text-[11px] text-gray-500 bg-gray-900 border border-gray-800 px-2 py-0.5 rounded-full">
-                        未设置 Key
-                      </span>
-                    )}
-                  </div>
-                </div>
-
-                {/* Quick Presets Pills */}
-                <div className="pt-1 flex items-center space-x-1.5 flex-wrap gap-y-1">
-                  <span className="text-[10px] text-gray-500 font-medium">快捷填入:</span>
-                  {meta.presets.map((preset, idx) => (
-                    <button
-                      key={idx}
-                      type="button"
-                      onClick={() => handleApplyPreset(role, preset)}
-                      className="px-2 py-0.5 text-[10px] bg-gray-900 hover:bg-gray-800 border border-gray-700/80 text-gray-300 hover:text-white rounded transition-colors"
-                      title={`填入地址: ${preset.baseUrl}\n推荐模型: ${preset.model}`}
-                    >
-                      {preset.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Form Inputs */}
-              <div className="space-y-3 text-xs pt-1">
-                {/* Base URL Input */}
-                <div>
-                  <label className="block text-gray-400 font-medium mb-1">
-                    接口地址 (Base URL)
-                  </label>
-                  <div className="relative">
-                    <Globe size={13} className="absolute left-3 top-2.5 text-gray-500" />
-                    <input
-                      type="text"
-                      value={state.baseUrl}
-                      onChange={e => handleFieldChange(role, 'baseUrl', e.target.value)}
-                      placeholder={role === 'embed' ? 'https://api.siliconflow.cn/v1' : 'https://api.deepseek.com/v1'}
-                      className="w-full bg-gray-900/90 border border-gray-700 rounded-lg pl-9 pr-3 py-1.5 text-gray-100 font-mono text-xs focus:outline-none focus:border-emerald-500 transition-colors"
-                    />
-                  </div>
-                </div>
-
-                {/* API Key Input */}
-                <div>
-                  <label className="block text-gray-400 font-medium mb-1 flex items-center justify-between">
-                    <span>API 密钥（本地加密保存）</span>
-                    <span className="text-[10px] text-gray-500">
-                      {state.hasKey ? '留空保持现有密钥' : '需要配置'}
-                    </span>
-                  </label>
-                  <div className="relative">
-                    <Key size={13} className="absolute left-3 top-2.5 text-gray-500" />
-                    <input
-                      type={state.showKey ? 'text' : 'password'}
-                      value={state.newKey}
-                      onChange={e => handleFieldChange(role, 'newKey', e.target.value)}
-                      placeholder={state.hasKey ? '•••••••••••••••• (已保存，输入新 Key 覆盖)' : 'sk-...'}
-                      className="w-full bg-gray-900/90 border border-gray-700 rounded-lg pl-9 pr-9 py-1.5 text-gray-100 font-mono text-xs focus:outline-none focus:border-emerald-500 transition-colors"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => handleFieldChange(role, 'showKey', !state.showKey)}
-                      className="absolute right-2.5 top-2 text-gray-500 hover:text-gray-300"
-                      title={state.showKey ? '隐藏密钥' : '显示密钥'}
-                    >
-                      {state.showKey ? <EyeOff size={14} /> : <Eye size={14} />}
-                    </button>
-                  </div>
-                </div>
-
-                {/* Model Identifier Input */}
-                <div>
-                  <label className="block text-gray-400 font-medium mb-1">
-                    模型标识 (Model Name)
-                  </label>
-                  <div className="relative">
-                    <Cpu size={13} className="absolute left-3 top-2.5 text-gray-500" />
-                    <input
-                      type="text"
-                      value={state.model}
-                      onChange={e => handleFieldChange(role, 'model', e.target.value)}
-                      placeholder={role === 'embed' ? 'BAAI/bge-m3' : 'deepseek-chat'}
-                      className="w-full bg-gray-900/90 border border-gray-700 rounded-lg pl-9 pr-3 py-1.5 text-gray-100 font-mono text-xs focus:outline-none focus:border-emerald-500 transition-colors"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <label className="text-xs text-gray-400">请求超时（秒） <input className="w-20 bg-gray-800 p-1" type="number" min="5" max="300" value={state.timeoutMs/1000} onChange={e=>handleFieldChange(role,'timeoutMs',Math.max(5000,Math.min(300000,Number(e.target.value)*1000)))}/></label>
-              {/* Card Footer / Actions */}
-              <div className="pt-2 border-t border-gray-800/80 flex flex-col space-y-2">
-                {/* Test Feedback Display if available */}
-                {state.testStatus.message && (
-                  <div className={`flex items-center space-x-1.5 text-xs px-2.5 py-1.5 rounded bg-gray-900 border ${state.testStatus.ok ? 'border-emerald-800 text-emerald-300' : 'border-red-800 text-red-300'}`}>
-                    {state.testStatus.ok ? <CheckCircle2 size={13} className="text-emerald-400 shrink-0" /> : <AlertCircle size={13} className="text-red-400 shrink-0" />}
-                    <span className="truncate">
-                      {state.testStatus.message} {state.testStatus.latencyMs ? `(${state.testStatus.latencyMs}ms)` : ''}
-                    </span>
-                  </div>
-                )}
-
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center space-x-1.5">
-                    {/* Test button */}
-                    <button
-                      type="button"
-                      onClick={() => handleTestRole(role)}
-                      disabled={state.testStatus.testing}
-                      className="px-2.5 py-1.5 bg-gray-900 hover:bg-gray-800 border border-gray-700 text-gray-300 hover:text-white rounded-lg text-xs font-medium transition-colors flex items-center space-x-1"
-                      title={role === 'embed' ? '发送测试向量请求至 /embeddings' : '发送连通性探测请求'}
-                    >
-                      <Zap size={12} className="text-amber-400" />
-                      <span>{state.testStatus.testing ? '验证中…' : role === 'asr' ? '测试真实音频' : '测试服务'}</span>
-                    </button>
-
-                    {role === 'chat' && <button type="button" disabled={state.testStatus.testing} className="text-xs text-purple-300" onClick={()=>void handleTestRole('chat','vision')}>测试图片能力</button>}
-                    {/* Sync to all button */}
-                    <button
-                      type="button"
-                      onClick={() => handleSyncToAll(role)}
-                      className="px-2.5 py-1.5 bg-gray-900 hover:bg-gray-800 border border-gray-700 text-gray-400 hover:text-cyan-300 rounded-lg text-xs font-medium transition-colors flex items-center space-x-1"
-                      title="将当前卡片的 Base URL 和 API Key 快速应用至其他 2 个模型"
-                    >
-                      <Copy size={12} />
-                      <span className="hidden sm:inline">同步到全部</span>
-                    </button>
-                  </div>
-
-                  <div className="flex items-center space-x-1.5">
-                    {/* If role is embed: extra rebuild button */}
-                    {role === 'embed' && (
-                      <button
-                        type="button"
-                        onClick={handleRebuildEmbeddings}
-                        disabled={rebuildingEmbeddings}
-                        className="px-2.5 py-1.5 bg-cyan-950/60 hover:bg-cyan-900/60 border border-cyan-800/80 text-cyan-300 rounded-lg text-xs font-medium transition-colors flex items-center space-x-1"
-                        title="使用当前向量嵌入模型重新为全部文档生成语义向量"
-                      >
-                        <RefreshCw size={12} className={rebuildingEmbeddings ? 'animate-spin' : ''} />
-                        <span>{rebuildingEmbeddings ? '重建中...' : '重建全库向量'}</span>
-                      </button>
-                    )}
-
-                    {/* Save single role button */}
-                    <button
-                      type="button"
-                      onClick={() => handleSaveRole(role)}
-                      disabled={state.saving}
-                      className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white rounded-lg text-xs font-semibold transition-colors flex items-center space-x-1"
-                    >
-                      <Save size={12} />
-                      <span>{state.saving ? '保存中...' : '保存'}</span>
-                    </button>
-                  </div>
-                </div>
-              </div>
+          {syncToast && (
+            <div className="-mt-4">
+              <Notice tone="success" action={<button onClick={() => setSyncToast(null)} className={cx(button.icon, 'h-5 w-5 text-success')} title="关闭"><X size={12} /></button>}>
+                <span className="inline-flex items-center gap-1.5"><CheckCircle2 size={13} />{syncToast}</span>
+              </Notice>
             </div>
-          );
-        })}
+          )}
+
+          <Group footer={<>使用 OpenAI 官方或一体化 API 聚合转发平台时，可在任意一项填好后点击「同步到全部」，免除重复粘贴。只有服务商确实同时提供这些能力时才使用。</>}>
+            <Row label="离线模拟服务" detail="在本机 52140 端口启动模拟接口，用于不花钱地演示流程">
+              <span className="text-[12px] text-label-3 inline-flex items-center gap-1"><Server size={12} />{mockRunning ? '运行中' : '已停止'}</span>
+              <Switch checked={mockRunning} onChange={() => void handleToggleMock()} label="离线模拟服务 (52140)" />
+            </Row>
+          </Group>
+
+          {CONFIG_ROLES.map(role => {
+            const meta = ROLE_METADATA[role];
+            const state = roleStates[role];
+            const Icon = meta.icon;
+            return (
+              <section key={role} className="space-y-2">
+                <div className="flex items-center gap-3 px-1">
+                  <div className={cx('h-8 w-8 rounded-[9px] bg-gradient-to-b text-white flex items-center justify-center shrink-0', meta.tile)}>
+                    <Icon size={16} strokeWidth={2} />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <h2 className="text-[15px] font-semibold text-label">{meta.title}</h2>
+                      <Badge>{meta.tag}</Badge>
+                    </div>
+                    <p className="text-[12px] text-label-2">{meta.subtitle}</p>
+                  </div>
+                  {state.hasKey
+                    ? <Badge tone="success" title="密钥由系统加密存储保护"><ShieldCheck size={11} />已配置密钥</Badge>
+                    : <Badge>未设置 Key</Badge>}
+                </div>
+
+                <div className="rounded-2xl bg-surface shadow-card divide-y divide-separator">
+                  <Row label="快捷填入" detail="填入服务商的地址和推荐模型，密钥仍需自行填写">
+                    <select
+                      aria-label={`${meta.title} 快捷填入`}
+                      value=""
+                      onChange={e => { const preset = meta.presets[Number(e.target.value)]; if (preset) handleApplyPreset(role, preset); }}
+                      className={cx(selectField, 'max-w-[220px]')}
+                    >
+                      <option value="" disabled>选择服务商…</option>
+                      {meta.presets.map((preset, idx) => <option key={idx} value={idx}>{preset.label}</option>)}
+                    </select>
+                  </Row>
+                  <Row label="接口地址 (Base URL)">
+                    <input type="text" value={state.baseUrl} onChange={e => handleFieldChange(role, 'baseUrl', e.target.value)}
+                      placeholder={role === 'embed' ? 'https://api.siliconflow.cn/v1' : 'https://api.deepseek.com/v1'} className={inputRowField} />
+                  </Row>
+                  <Row label="API 密钥（本地加密保存）" detail={state.hasKey ? '留空保持现有密钥' : '需要配置'}>
+                    <div className="relative w-full max-w-[360px]">
+                      <KeyRound size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-label-3 pointer-events-none" />
+                      <input type={state.showKey ? 'text' : 'password'} value={state.newKey} onChange={e => handleFieldChange(role, 'newKey', e.target.value)}
+                        placeholder={state.hasKey ? '••••••••（已保存，输入新 Key 覆盖）' : 'sk-...'} className={cx(inputRowField, 'pl-7 pr-8')} />
+                      <button type="button" onClick={() => handleFieldChange(role, 'showKey', !state.showKey)} className="absolute right-1.5 top-1/2 -translate-y-1/2 h-5 w-5 inline-flex items-center justify-center text-label-3 hover:text-label" title={state.showKey ? '隐藏密钥' : '显示密钥'}>
+                        {state.showKey ? <EyeOff size={13} /> : <Eye size={13} />}
+                      </button>
+                    </div>
+                  </Row>
+                  <Row label="模型标识 (Model Name)">
+                    <input type="text" value={state.model} onChange={e => handleFieldChange(role, 'model', e.target.value)}
+                      placeholder={role === 'embed' ? 'BAAI/bge-m3' : 'deepseek-chat'} className={inputRowField} />
+                  </Row>
+                  <Row label="请求超时（秒）">
+                    <input className={cx(fieldBox, 'h-7 w-20 text-right tabular-nums')} type="number" min="5" max="300" value={state.timeoutMs/1000}
+                      onChange={e=>handleFieldChange(role,'timeoutMs',Math.max(5000,Math.min(300000,Number(e.target.value)*1000)))}/>
+                  </Row>
+                  <div className="px-3 py-2.5 space-y-2">
+                    {state.testStatus.message && (
+                      <Notice tone={state.testStatus.ok ? 'success' : 'danger'}>
+                        <span className="inline-flex items-start gap-1.5">
+                          {state.testStatus.ok ? <CheckCircle2 size={13} className="shrink-0 mt-[2px]" /> : <AlertCircle size={13} className="shrink-0 mt-[2px]" />}
+                          <span>{state.testStatus.message} {state.testStatus.latencyMs ? `(${state.testStatus.latencyMs}ms)` : ''}</span>
+                        </span>
+                      </Notice>
+                    )}
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <button type="button" onClick={() => handleTestRole(role)} disabled={state.testStatus.testing} className={cx(button.secondary, 'h-7 text-[12px]')} title={role === 'embed' ? '发送测试向量请求至 /embeddings' : '发送连通性探测请求'}>
+                        {state.testStatus.testing ? <RefreshCw size={12} className="animate-spin" /> : <Zap size={12} />}
+                        <span>{state.testStatus.testing ? '验证中…' : role === 'asr' ? '测试真实音频' : '测试服务'}</span>
+                      </button>
+                      {role === 'chat' && (
+                        <button type="button" disabled={state.testStatus.testing} className={cx(button.secondary, 'h-7 text-[12px]')} onClick={()=>void handleTestRole('chat','vision')}>
+                          <ImageIcon size={12} />
+                          <span>测试图片能力</span>
+                        </button>
+                      )}
+                      <button type="button" onClick={() => handleSyncToAll(role)} className={cx(button.plain, 'h-7 text-[12px]')} title="将当前卡片的 Base URL 和 API Key 快速应用至其他 2 个模型">
+                        <Copy size={12} />
+                        <span>同步到全部</span>
+                      </button>
+                      <div className="flex-1" />
+                      {role === 'embed' && (
+                        <button type="button" onClick={handleRebuildEmbeddings} disabled={rebuildingEmbeddings} className={cx(button.plain, 'h-7 text-[12px]')} title="使用当前向量嵌入模型重新为全部文档生成语义向量">
+                          <RefreshCw size={12} className={rebuildingEmbeddings ? 'animate-spin' : ''} />
+                          <span>{rebuildingEmbeddings ? '重建中...' : '重建全库向量'}</span>
+                        </button>
+                      )}
+                      <button type="button" onClick={() => handleSaveRole(role)} disabled={state.saving} className={cx(button.primary, 'h-7 px-3 text-[12px]')}>
+                        <span>{state.saving ? '保存中...' : '保存'}</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </section>
+            );
+          })}
+        </div>
       </div>
     </div>
   );

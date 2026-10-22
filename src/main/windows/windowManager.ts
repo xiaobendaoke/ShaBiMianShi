@@ -48,6 +48,12 @@ export class WindowManager {
       minWidth: 900,
       minHeight: 600,
       title: '傻逼面试 - 知识库与面试辅助',
+      // Unified toolbar: traffic lights inset into the translucent sidebar.
+      titleBarStyle: 'hiddenInset',
+      trafficLightPosition: { x: 18, y: 18 },
+      vibrancy: 'sidebar',
+      visualEffectState: 'followWindow',
+      backgroundColor: '#00000000',
       webPreferences: {
         preload: path.join(__dirname, '../preload/index.js'),
         contextIsolation: true,

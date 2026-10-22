@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { History, Trash2, MessageSquare, Calendar, ChevronRight } from 'lucide-react';
+import { Trash2, MessageSquare, ArrowRight } from 'lucide-react';
 import { SessionRecord, TurnRecord } from '../../../main/types';
+import { AnswerContent } from './AnswerContent';
+import { Badge, EmptyState, PageHeader, Toolbar, button, cx } from './ui';
 
 interface SessionHistoryViewProps {
   currentSession: SessionRecord | null;
@@ -46,117 +48,79 @@ export const SessionHistoryView: React.FC<SessionHistoryViewProps> = ({
     }
   };
 
+  const selected = sessions.find(s => s.id === selectedSessionId);
+
   return (
-    <div className="flex-1 flex overflow-hidden bg-gray-900">
-      {/* Left: Sessions List */}
-      <div className="w-72 border-r border-gray-800 bg-gray-950/70 p-4 flex flex-col justify-between shrink-0">
-        <div className="space-y-3">
-          <div className="flex items-center justify-between pb-2 border-b border-gray-800">
-            <span className="text-xs font-semibold text-gray-300">所有会话存档</span>
-            <span className="text-[11px] text-gray-500">{sessions.length} 个记录</span>
-          </div>
-
-          <div className="space-y-1">
-            {sessions.map(s => {
-              const isSelected = selectedSessionId === s.id;
-              return (
-                <div
-                  key={s.id}
-                  onClick={() => setSelectedSessionId(s.id)}
-                  className={`p-3 rounded-lg text-xs cursor-pointer transition-all border flex items-center justify-between group ${
-                    isSelected
-                      ? 'bg-emerald-950/40 border-emerald-700/60 text-emerald-300'
-                      : 'bg-gray-900/60 border-gray-800/80 text-gray-400 hover:bg-gray-900 hover:text-gray-200'
-                  }`}
-                >
-                  <div className="space-y-1 truncate pr-2">
-                    <div className="font-semibold truncate">{s.title}</div>
-                    <div className="text-[10px] text-gray-500 flex items-center space-x-1">
-                      <Calendar size={11} />
-                      <span>{new Date(s.createdAt).toLocaleDateString()}</span>
-                    </div>
+    <div className="flex-1 flex min-w-0 overflow-hidden aurora">
+      {/* Sessions */}
+      <aside className="w-[264px] shrink-0 border-r border-separator flex flex-col min-h-0 glass">
+        <Toolbar className="justify-between">
+          <span className="text-[13px] font-semibold text-label">所有会话存档</span>
+          <span className="text-[11px] text-label-3">{sessions.length} 个记录</span>
+        </Toolbar>
+        <div className="flex-1 overflow-y-auto p-2 space-y-px">
+          {sessions.map(s => {
+            const isSelected = selectedSessionId === s.id;
+            return (
+              <div key={s.id} className={cx('group relative rounded-lg transition-colors', isSelected ? 'bg-accent-soft' : 'hover:bg-fill')}>
+                <button onClick={() => setSelectedSessionId(s.id)} className="w-full text-left pl-3 pr-9 py-2">
+                  <div className={cx('truncate text-[13px] text-label', isSelected && 'font-medium')}>{s.title}</div>
+                  <div className="mt-0.5 text-[11px] text-label-3 flex items-center gap-1.5">
+                    <span>{new Date(s.createdAt).toLocaleDateString()}</span>
+                    {currentSession?.id === s.id && <span className="text-accent-text">· 当前</span>}
                   </div>
-
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleDeleteSession(s.id);
-                    }}
-                    className="p-1 text-gray-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
-                    title="删除会话"
-                  >
-                    <Trash2 size={13} />
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      </div>
-
-      {/* Right: Turns in this session */}
-      <div className="flex-1 overflow-y-auto p-6 space-y-4">
-        <div className="flex items-center justify-between pb-3 border-b border-gray-800">
-          <div>
-            <h2 className="text-sm font-semibold text-gray-100">
-              {sessions.find(s => s.id === selectedSessionId)?.title || '会话详情'}
-            </h2>
-            <p className="text-xs text-gray-400 mt-0.5">历史问答轮次与引用快照存档</p>
-          </div>
-
-          {selectedSessionId && (
-            <button
-              onClick={() => {
-                const s = sessions.find(item => item.id === selectedSessionId);
-                if (s) onSelectSession(s);
-              }}
-              className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-md text-xs font-medium transition-colors flex items-center space-x-1"
-            >
-              <span>载入至当前面试辅导</span>
-              <ChevronRight size={13} />
-            </button>
-          )}
-        </div>
-
-        {turns.length === 0 ? (
-          <div className="h-64 flex flex-col items-center justify-center text-xs text-gray-500 space-y-2 border border-dashed border-gray-800 rounded-xl">
-            <MessageSquare size={24} className="text-gray-600" />
-            <div>此会话暂无问答记录</div>
-          </div>
-        ) : (
-          <div className="space-y-4 max-w-3xl">
-            {turns.map((t, idx) => (
-              <div key={t.id} className="p-4 bg-gray-950 border border-gray-800 rounded-xl space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="font-semibold text-xs text-emerald-400">#{idx + 1} 提问</span>
-                  <span className="text-[10px] text-gray-500">{new Date(t.createdAt).toLocaleTimeString()}</span>
-                </div>
-
-                <div className="text-xs font-medium text-gray-100 bg-gray-900 p-2.5 rounded-lg border border-gray-800">
-                  {t.question}
-                </div>
-
-                <div className="text-xs text-gray-300 leading-relaxed whitespace-pre-wrap select-text">
-                  {t.answer}
-                </div>
-
-                {t.citations.length > 0 && (
-                  <div className="pt-2 border-t border-gray-900 flex flex-wrap gap-2">
-                    {t.citations.map(c => (
-                      <span
-                        key={c.id}
-                        className="px-2 py-0.5 bg-gray-900 border border-gray-800 rounded text-[10px] text-emerald-400"
-                        title={c.snippet}
-                      >
-                        [资料{c.citationIndex}] {c.fileName} {c.page ? `p.${c.page}` : ''}
-                      </span>
-                    ))}
-                  </div>
-                )}
+                </button>
+                <button onClick={() => handleDeleteSession(s.id)} className={cx(button.icon, 'absolute right-1.5 top-1/2 -translate-y-1/2 h-6 w-6 opacity-0 group-hover:opacity-100 focus:opacity-100 hover:text-danger')} title="删除会话">
+                  <Trash2 size={13} />
+                </button>
               </div>
-            ))}
+            );
+          })}
+        </div>
+      </aside>
+
+      {/* Turns in this session */}
+      <div className="flex-1 min-w-0 flex flex-col">
+        <Toolbar />
+        <div className="flex-1 overflow-y-auto">
+          <div className="max-w-[780px] mx-auto px-10 pt-9 pb-14">
+            <PageHeader title={selected?.title || '会话详情'} subtitle={`历史问答轮次与引用快照存档${turns.length ? ` · 共 ${turns.length} 题` : ''}`}>
+              {selected && (
+                <button onClick={() => onSelectSession(selected)} className={button.primary}>
+                  <span>载入至当前面试辅导</span>
+                  <ArrowRight size={14} />
+                </button>
+              )}
+            </PageHeader>
+
+            {turns.length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-separator">
+                <EmptyState icon={<MessageSquare size={30} strokeWidth={1.25} />} title="此会话暂无问答记录" />
+              </div>
+            ) : (
+              <div className="space-y-10">
+                {turns.map((t, idx) => (
+                  <article key={t.id} className="space-y-3">
+                    <div className="flex items-center gap-2 text-[12px] text-label-3">
+                      <span className="font-medium text-accent-text">#{idx + 1} 提问</span>
+                      <span className="tabular-nums">{new Date(t.createdAt).toLocaleTimeString()}</span>
+                      {t.status !== 'completed' && <Badge tone={t.status === 'error' ? 'danger' : 'neutral'}>{t.status === 'error' ? '生成失败' : t.status === 'cancelled' ? '已取消' : t.status}</Badge>}
+                    </div>
+                    <h2 className="text-[18px] leading-snug font-semibold text-label select-text">{t.question}</h2>
+                    {t.answer ? <div className="select-text"><AnswerContent text={t.answer} /></div> : <p className="text-[13px] text-label-3">无回答内容</p>}
+                    {t.citations.length > 0 && (
+                      <div className="pt-1 flex flex-wrap gap-1.5">
+                        {t.citations.map(c => (
+                          <span key={c.id} title={c.snippet}><Badge tone="accent">资料{c.citationIndex} · {c.fileName} {c.page ? `p.${c.page}` : ''}</Badge></span>
+                        ))}
+                      </div>
+                    )}
+                  </article>
+                ))}
+              </div>
+            )}
           </div>
-        )}
+        </div>
       </div>
     </div>
   );

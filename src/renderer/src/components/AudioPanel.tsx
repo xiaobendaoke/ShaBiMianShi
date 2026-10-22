@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Mic, MicOff, Loader2, Pause, Play, Zap, FileText, X, AlertCircle } from 'lucide-react';
+import { Mic, Loader2, Pause, Play, Zap, Captions, X, AlertCircle } from 'lucide-react';
 import type { TranscriptRecord } from '../../../main/types';
 import { AudioCapture } from '../services/audioCapture';
+import { Notice, button, cx, selectField } from './ui';
 
 export function AudioPanel({ sessionId, edit }: { sessionId?: string; edit: (text: string) => void }) {
   const api = (window as any).api;
@@ -169,204 +170,130 @@ export function AudioPanel({ sessionId, edit }: { sessionId?: string; edit: (tex
     };
   }, [sessionId]);
 
+  const meter = Math.min(1, level * 5);
+  const sourceName = (source: string) => source === 'system' ? '系统音' : '麦克风';
+
   return (
     <div className="relative">
-      {/* Audio Capsule Bar */}
-      <div className="flex items-center flex-wrap gap-2">
+      <div className="flex items-center flex-wrap gap-x-2 gap-y-1.5 px-1">
         {/* Main One-Click Toggle Button */}
         {starting ? (
-          <button
-            onClick={stop}
-            title="取消连接"
-            className="flex items-center space-x-1.5 px-3 py-1.5 bg-emerald-800/50 border border-emerald-600/50 text-emerald-200 rounded-lg text-xs font-medium cursor-wait shadow-sm"
-          >
-            <Loader2 size={13} className="animate-spin text-emerald-300" />
-            <span>连接中… 点击取消</span>
+          <button onClick={stop} title="取消连接" className={cx(button.chip, 'bg-accent-soft text-accent-text hover:bg-accent-soft')}>
+            <Loader2 size={13} className="animate-spin" />
+            <span>连接中…</span>
           </button>
         ) : running ? (
-          <button
-            onClick={stop}
-            className="flex items-center space-x-2 px-3 py-1.5 bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-500/60 text-emerald-300 rounded-lg text-xs font-semibold shadow-sm shadow-emerald-950/50 transition-all group"
-            title="点击停止监听 (快捷键: Cmd+Shift+G)"
-          >
+          <button onClick={stop} className={cx(button.chip, 'bg-danger-soft text-danger hover:bg-danger-soft hover:text-danger pr-3')} title="点击停止监听 (快捷键: Cmd+Shift+G)">
             <span className="relative flex h-2 w-2">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-400"></span>
+              {!paused && <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-current opacity-60" />}
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-current" />
             </span>
             <span>{paused ? '监听已暂停' : pending ? `识别中(${pending})` : '正在听题'}</span>
-            <span className="text-[10px] text-emerald-400/70 group-hover:text-emerald-300 transition-colors">停止</span>
+            <span className="text-[11px] opacity-70">· 停止</span>
           </button>
         ) : (
-          <button
-            disabled={!sessionId}
-            onClick={() => void start()}
-            className="flex items-center space-x-1.5 px-3 py-1.5 bg-gray-800 hover:bg-gray-700 active:bg-gray-600 text-gray-200 border border-gray-700 rounded-lg text-xs font-medium shadow-sm transition-all disabled:opacity-40"
-            title="开启实时语音监听 (快捷键: Cmd+Shift+G)"
-          >
-            <Mic size={13} className="text-emerald-400" />
+          <button disabled={!sessionId} onClick={() => void start()} className={button.chip} title="开启实时语音监听 (快捷键: Cmd+Shift+G)">
+            <Mic size={13} />
             <span>开始监听</span>
           </button>
         )}
 
         {/* Audio Mode Select */}
-        <select
-          value={mode}
-          disabled={running || starting}
-          onChange={e => setMode(e.target.value)}
-          className="bg-gray-800/90 hover:bg-gray-800 border border-gray-700/80 text-gray-300 text-xs rounded-lg px-2 py-1.5 focus:outline-none focus:border-emerald-500 transition-colors disabled:opacity-50"
-          title="选择音源模式"
-        >
+        <select value={mode} disabled={running || starting} onChange={e => setMode(e.target.value)} className={cx(selectField, 'rounded-full bg-transparent hover:bg-fill disabled:opacity-50')} title="选择音源模式">
           <option value="system">系统声音 (线上面试)</option>
           <option value="microphone">麦克风 (线下面试)</option>
           <option value="both">双音源 (系统+麦克风)</option>
         </select>
 
-        {/* Action Controls when Running */}
-        {running && (
-          <div className="flex items-center space-x-1 bg-gray-900/80 p-0.5 rounded-lg border border-gray-800">
-            <button
-              onClick={() => commands.current('listen')}
-              className="p-1 hover:bg-gray-800 text-gray-300 hover:text-white rounded transition-colors"
-              title={paused ? '继续监听' : '暂停监听'}
-            >
-              {paused ? <Play size={12} className="text-emerald-400" /> : <Pause size={12} />}
-            </button>
-            <button
-              onClick={() => void api.answerImmediately().catch((e: any) => setError(e.message))}
-              className="flex items-center space-x-1 px-1.5 py-0.5 hover:bg-gray-800 text-emerald-400 hover:text-emerald-300 rounded text-[11px] font-medium transition-colors"
-              title="立即触发回答 (Cmd+Shift+Enter)"
-            >
-              <Zap size={11} />
-              <span>立即回答</span>
-            </button>
+        {running && <>
+          <button onClick={() => commands.current('listen')} className={cx(button.icon, 'h-7 w-7 rounded-full')} title={paused ? '继续监听' : '暂停监听'}>
+            {paused ? <Play size={13} /> : <Pause size={13} />}
+          </button>
+          <button onClick={() => void api.answerImmediately().catch((e: any) => setError(e.message))} className={cx(button.chip, 'text-accent-text')} title="立即触发回答 (Cmd+Shift+Enter)">
+            <Zap size={12} />
+            <span>立即回答</span>
+          </button>
+        </>}
+
+        <label className="inline-flex items-center gap-1.5 h-7 px-1.5 text-[12px] text-label-2 hover:text-label">
+          <input type="checkbox" checked={auto} onChange={e => { setAuto(e.target.checked); void api.controlListening({ auto: e.target.checked }).catch((e: any) => setError(e.message)); }} className="h-3.5 w-3.5 accent-[var(--accent)]" />
+          <span>自动回答</span>
+        </label>
+        <label className="inline-flex items-center gap-1.5 h-7 px-1.5 text-[12px] text-label-2 hover:text-label" title="自己回答期间开启，避免自己的话再次触发提问 (Cmd+Shift+M)">
+          <input type="checkbox" checked={self} onChange={e => { setSelf(e.target.checked); void api.controlListening({ selfSpeaking: e.target.checked }).catch((e: any) => setError(e.message)); }} className="h-3.5 w-3.5 accent-[var(--accent)]" />
+          <span>我正在说</span>
+        </label>
+
+        <div className="flex-1" />
+
+        {(running || starting) && (
+          <div className="flex items-center gap-2 text-[11px] text-label-2" role="status">
+            <span className="@max-[640px]:hidden">自动分段转写 · </span><span>{starting ? '正在连接音源' : phase}</span><span className="@max-[640px]:hidden"> · {auto ? '自动回答开启' : '自动回答关闭'}</span>
+            <span className="flex items-end gap-[2px] h-3" title={`输入电平 ${Math.round(meter * 100)}%`}>
+              {[0.15, 0.35, 0.55, 0.75, 0.9].map(threshold => <span key={threshold} className={cx('w-[3px] rounded-full transition-colors', meter >= threshold ? 'bg-success' : 'bg-fill-strong')} style={{height: `${4 + threshold * 8}px`}} />)}
+            </span>
           </div>
         )}
 
-        {/* Subtle Checkbox Chips */}
-        <div className="flex items-center space-x-2 text-[11px] text-gray-400">
-          <label className="flex items-center space-x-1 cursor-pointer hover:text-gray-300 transition-colors">
-            <input
-              type="checkbox"
-              checked={auto}
-              onChange={e => {
-                setAuto(e.target.checked);
-                void api.controlListening({ auto: e.target.checked }).catch((e: any) => setError(e.message));
-              }}
-              className="rounded accent-emerald-500 w-3 h-3"
-            />
-            <span>自动回答</span>
-          </label>
-          <label className="flex items-center space-x-1 cursor-pointer hover:text-gray-300 transition-colors">
-            <input
-              type="checkbox"
-              checked={self}
-              onChange={e => {
-                setSelf(e.target.checked);
-                void api.controlListening({ selfSpeaking: e.target.checked }).catch((e: any) => setError(e.message));
-              }}
-              className="rounded accent-emerald-500 w-3 h-3"
-            />
-            <span>我正在说</span>
-          </label>
-        </div>
-
         {/* Transcript Drawer Toggle (Unobtrusive) */}
         {records.length > 0 && (
-          <button
-            onClick={() => setShowDrawer(!showDrawer)}
-            className={`flex items-center space-x-1 px-2 py-1 rounded-md text-[11px] font-medium border transition-colors ${
-              showDrawer
-                ? 'bg-emerald-950/80 border-emerald-600 text-emerald-300'
-                : 'bg-gray-800/80 border-gray-700 text-gray-400 hover:text-gray-200 hover:bg-gray-800'
-            }`}
-            title="查看实时字幕明细"
-          >
-            <FileText size={11} />
+          <button onClick={() => setShowDrawer(!showDrawer)} className={cx(button.chip, showDrawer && 'bg-accent-soft text-accent-text')} title="查看实时字幕明细">
+            <Captions size={13} />
             <span>字幕 ({records.length})</span>
           </button>
         )}
       </div>
 
-      {(running || starting) && <div className="mt-2 text-xs text-gray-400 space-y-1" role="status">
-        <div>自动分段转写 · {starting ? '正在连接音源' : phase} · {auto ? '自动回答开启' : '自动回答关闭'}</div>
-        <div className="flex gap-3">{Object.entries(health).map(([source,h])=><span key={source}>{source==='system'?'系统音':'麦克风'}：{h.state} · 电平 {Math.min(100,Math.round(h.rms*500))}%</span>)}{!Object.keys(health).length&&<span>输入电平 {Math.min(100,Math.round(level*500))}%</span>}</div>
-        {pendingText&&<div className="text-emerald-300 break-words">待提交：{pendingText}</div>}
-        {!auto&&<div className="text-amber-300">当前只转写，不会自动发题；点击“立即回答”或开启自动回答。</div>}
-      </div>}
+      {(running || starting) && (Object.keys(health).length > 0 || pendingText || !auto) && (
+        <div className="mt-1 px-2 space-y-0.5 text-[11px] text-label-2">
+          {Object.keys(health).length > 0 && <div className="flex gap-3">{Object.entries(health).map(([source,h])=><span key={source}>{sourceName(source)}：{h.state} · 电平 {Math.min(100,Math.round(h.rms*500))}%</span>)}</div>}
+          {pendingText && <div className="text-accent-text break-words">待提交：{pendingText}</div>}
+          {!auto && <div className="text-warning">当前只转写，不会自动发题；点击“立即回答”或开启自动回答。</div>}
+        </div>
+      )}
 
       {/* Error Alert Banner */}
       {error && (
-        <div
-          role="alert"
-          className="mt-2 flex items-center justify-between p-2 bg-red-950/70 border border-red-800/80 rounded-lg text-xs text-red-300 animate-in fade-in"
-        >
-          <div className="flex items-center space-x-1.5 flex-1 mr-2">
-            <AlertCircle size={13} className="shrink-0 text-red-400" />
-            <span className="truncate">{error}</span>
-          </div>
-          <div className="flex items-center space-x-2 shrink-0">
-            <button
-              onClick={() => void api.openAudioPermissions(mode === 'microphone' ? 'microphone' : 'system').catch((e: any) => setError(e.message))}
-              className="text-amber-400 underline hover:text-amber-300 text-[11px]"
-            >
-              打开权限
-            </button>
-            <button onClick={() => setError('')} className="text-gray-400 hover:text-gray-200">
-              <X size={12} />
-            </button>
-          </div>
+        <div className="mt-1.5">
+          <Notice tone="danger" action={<>
+            <button onClick={() => void api.openAudioPermissions(mode === 'microphone' ? 'microphone' : 'system').catch((e: any) => setError(e.message))} className={cx(button.link, 'h-6 text-[12px] text-danger hover:bg-danger-soft')}>打开权限</button>
+            <button onClick={() => setError('')} className={cx(button.icon, 'h-6 w-6 text-danger')} title="关闭"><X size={12} /></button>
+          </>}>
+            <span className="inline-flex items-start gap-1.5"><AlertCircle size={13} className="shrink-0 mt-[2px]" />{error}</span>
+          </Notice>
         </div>
       )}
 
       {/* Subtitles Popover / Drawer */}
-      {showDrawer && (
-        <div className="absolute top-full left-0 mt-2 w-96 max-h-72 bg-gray-950/95 border border-gray-800 rounded-xl shadow-2xl p-3 z-50 flex flex-col backdrop-blur-md">
-          <div className="flex items-center justify-between pb-2 border-b border-gray-800 mb-2">
-            <div className="flex items-center space-x-1.5 text-xs font-semibold text-gray-200">
-              <FileText size={13} className="text-emerald-400" />
+      {showDrawer && <>
+        <button aria-label="关闭字幕" className="fixed inset-0 z-40 cursor-default" onClick={() => setShowDrawer(false)} />
+        <div className="absolute bottom-full right-0 mb-2 w-[420px] max-h-[360px] bg-elevated border border-separator rounded-2xl shadow-pop z-50 flex flex-col animate-fade-up">
+          <div className="flex items-center justify-between px-4 h-11 border-b border-separator shrink-0">
+            <div className="flex items-center gap-1.5 text-[13px] font-semibold text-label">
+              <Captions size={14} className="text-accent" />
               <span>实时字幕记录</span>
             </div>
-            <button onClick={() => setShowDrawer(false)} className="text-gray-400 hover:text-gray-200 p-0.5 rounded">
-              <X size={13} />
-            </button>
+            <button onClick={() => setShowDrawer(false)} className={button.icon} title="关闭"><X size={14} /></button>
           </div>
-
-          <div className="flex-1 overflow-y-auto space-y-1.5 pr-1 text-xs">
+          <div className="flex-1 overflow-y-auto p-2 space-y-1">
             {records.slice(-30).map(r => (
-              <div key={r.id} className="p-1.5 bg-gray-900/60 rounded border border-gray-800/80 flex flex-col space-y-1">
-                <div className="flex items-center justify-between text-[10px] text-gray-500">
-                  <span className="font-medium text-gray-400">{r.source === 'system' ? '系统声音' : '麦克风'}</span>
-                  {r.latencyMs !== undefined && <span>ASR {r.latencyMs}ms · 排队 {r.queuedMs ?? 0}ms{r.audioMs !== undefined ? ` · 音频 ${(r.audioMs/1000).toFixed(1)}s` : ''}</span>}
+              <div key={r.id} className="rounded-lg px-2.5 py-2 hover:bg-fill">
+                <div className="flex items-center justify-between text-[11px] text-label-3">
+                  <span className="font-medium text-label-2">{r.source === 'system' ? '系统声音' : '麦克风'}</span>
+                  {r.latencyMs !== undefined && <span className="tabular-nums">ASR {r.latencyMs}ms · 排队 {r.queuedMs ?? 0}ms{r.audioMs !== undefined ? ` · 音频 ${(r.audioMs/1000).toFixed(1)}s` : ''}</span>}
                 </div>
-                <div className="text-gray-200 break-words">
-                  {r.ignored && <span className="text-gray-500">已忽略应答词 · </span>}{r.status === 'pending' ? <span className="text-amber-400 italic">转写中…</span> : r.text || r.error || '静音'}
+                <div className="mt-0.5 text-[13px] leading-relaxed text-label break-words select-text">
+                  {r.ignored && <span className="text-label-3">已忽略应答词 · </span>}{r.status === 'pending' ? <span className="text-warning italic">转写中…</span> : r.text || r.error || '静音'}
                 </div>
-                <div className="flex items-center space-x-2 pt-1 text-[10px]">
-                  {r.text && (
-                    <button
-                      className="text-emerald-400 hover:text-emerald-300 font-medium"
-                      onClick={() => {
-                        edit(r.text);
-                        setShowDrawer(false);
-                      }}
-                    >
-                      填入问题框 ↵
-                    </button>
-                  )}
-                  {r.status === 'error' && (
-                    <button
-                      className="text-amber-400 hover:text-amber-300"
-                      onClick={() => void api.retryTranscript(r.id).catch((e: any) => setError(e.message))}
-                    >
-                      重试转写
-                    </button>
-                  )}
+                <div className="flex items-center gap-1 pt-1">
+                  {r.text && <button className={cx(button.link, 'h-6 text-[12px]')} onClick={() => { edit(r.text); setShowDrawer(false); }}>填入问题框 ↵</button>}
+                  {r.status === 'error' && <button className={cx(button.link, 'h-6 text-[12px] text-warning hover:bg-warning-soft')} onClick={() => void api.retryTranscript(r.id).catch((e: any) => setError(e.message))}>重试转写</button>}
                 </div>
               </div>
             ))}
           </div>
         </div>
-      )}
+      </>}
     </div>
   );
 }

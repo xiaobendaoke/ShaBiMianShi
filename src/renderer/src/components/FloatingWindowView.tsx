@@ -2,6 +2,7 @@ import { AnswerContent } from './AnswerContent';
 import React, { useState, useEffect, useRef } from 'react';
 import { Pin, PinOff, X, Eye, FileText, MousePointer, Camera, Crop, Loader2 } from 'lucide-react';
 import { TurnRecord, CitationSnapshot } from '../../../main/types';
+import { Badge, Kbd, cx } from './ui';
 
 export const FloatingWindowView: React.FC = () => {
   const [currentTurn, setCurrentTurn] = useState<TurnRecord | null>(null);
@@ -109,77 +110,36 @@ export const FloatingWindowView: React.FC = () => {
   };
 
   const displayedTurn = isPinned ? pinnedTurn : currentTurn;
+  const hudButton = (active = false) => cx('h-6 w-6 inline-flex items-center justify-center rounded-md transition-colors', active ? 'bg-accent-soft text-accent-text' : 'text-label-2 hover:bg-fill hover:text-label');
 
   return (
     <div
       style={{ opacity }}
-      className="h-screen w-screen flex flex-col bg-gray-950/95 border border-emerald-500/40 rounded-xl overflow-hidden shadow-2xl text-gray-100 select-none backdrop-blur-md"
+      className="h-screen w-screen flex flex-col bg-elevated/85 backdrop-blur-2xl border border-separator rounded-2xl overflow-hidden text-label select-none"
     >
       {/* Draggable Titlebar */}
-      <div className="titlebar-drag h-8 bg-gray-900/90 border-b border-gray-800/80 px-3 flex items-center justify-between shrink-0">
-        <div className="flex items-center space-x-2">
-          <span className="w-2 h-2 rounded-full bg-emerald-400" />
-          <span className="text-[11px] font-semibold text-gray-200">傻逼面试 · 悬浮辅助</span>
-          {isPinned && (
-            <span className="text-[9px] bg-amber-950 border border-amber-800 text-amber-400 px-1 rounded">
-              已固定
-            </span>
-          )}
+      <div className="titlebar-drag h-9 px-3 flex items-center justify-between shrink-0 border-b border-separator">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className={cx('h-2 w-2 rounded-full shrink-0', displayedTurn?.status === 'streaming' ? 'bg-accent animate-pulse' : 'bg-success')} />
+          <span className="text-[12px] font-semibold text-label truncate">傻逼面试 · 悬浮辅助</span>
+          {isPinned && <Badge tone="warning">已固定</Badge>}
         </div>
 
-        <div className="no-drag flex items-center space-x-2">
-          {/* Quick Screen Capture */}
-          <button
-            onClick={() => handleCaptureScreen('interactive')}
-            disabled={isCapturing}
-            className="p-1 rounded hover:bg-gray-800 text-gray-400 hover:text-emerald-400 transition-colors"
-            title="选区截屏识题 (快捷键: Cmd+Alt+X)"
-          >
-            {isCapturing ? <Loader2 size={13} className="animate-spin text-emerald-400" /> : <Crop size={13} />}
+        <div className="no-drag flex items-center gap-0.5">
+          <button onClick={() => handleCaptureScreen('interactive')} disabled={isCapturing} className={hudButton()} title="选区截屏识题 (快捷键: Cmd+Alt+X)">
+            {isCapturing ? <Loader2 size={13} className="animate-spin text-accent" /> : <Crop size={13} />}
           </button>
-
-          {/* Click-through toggle */}
-          <button
-            onClick={handleToggleClickThrough}
-            className={`p-1 rounded hover:bg-gray-800 text-xs transition-colors ${
-              isClickThrough ? 'text-emerald-400 bg-emerald-950/60 border border-emerald-700/60' : 'text-gray-400 hover:text-gray-200'
-            }`}
-            title={isClickThrough ? '退出鼠标穿透 (快捷键: Cmd+Shift+P)' : '开启鼠标穿透 (点击穿透至后方应用，快捷键: Cmd+Shift+P)'}
-          >
+          <button onClick={handleToggleClickThrough} className={hudButton(isClickThrough)} title={isClickThrough ? '退出鼠标穿透 (快捷键: Cmd+Shift+P)' : '开启鼠标穿透 (点击穿透至后方应用，快捷键: Cmd+Shift+P)'}>
             <MousePointer size={13} />
           </button>
-
-          {/* Opacity Slider */}
-          <div className="flex items-center space-x-1" title="调节透明度">
-            <Eye size={12} className="text-gray-400" />
-            <input
-              type="range"
-              min="0.3"
-              max="1.0"
-              step="0.05"
-              value={opacity}
-              onChange={e => handleOpacityChange(parseFloat(e.target.value))}
-              className="w-14 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-emerald-500"
-            />
+          <div className="flex items-center gap-1 px-1" title="调节透明度">
+            <Eye size={12} className="text-label-3" />
+            <input type="range" min="0.3" max="1.0" step="0.05" value={opacity} onChange={e => handleOpacityChange(parseFloat(e.target.value))} className="w-14 h-1 accent-[var(--accent)]" />
           </div>
-
-          {/* Pin Button */}
-          <button
-            onClick={handleTogglePin}
-            className={`p-1 rounded hover:bg-gray-800 text-xs transition-colors ${
-              isPinned ? 'text-amber-400' : 'text-gray-400 hover:text-gray-200'
-            }`}
-            title={isPinned ? '取消固定回答' : '固定当前回答'}
-          >
+          <button onClick={handleTogglePin} className={hudButton(isPinned)} title={isPinned ? '取消固定回答' : '固定当前回答'}>
             {isPinned ? <PinOff size={13} /> : <Pin size={13} />}
           </button>
-
-          {/* Close Floating Window */}
-          <button
-            onClick={handleClose}
-            className="p-1 rounded hover:bg-red-900/40 text-gray-400 hover:text-red-400 transition-colors"
-            title="关闭悬浮窗"
-          >
+          <button onClick={handleClose} className={cx(hudButton(), 'hover:text-danger')} title="关闭悬浮窗">
             <X size={13} />
           </button>
         </div>
@@ -187,40 +147,35 @@ export const FloatingWindowView: React.FC = () => {
 
       {/* Click-through indicator banner */}
       {isClickThrough && (
-        <div className="bg-emerald-950/90 border-b border-emerald-800/80 px-2.5 py-1 text-[10px] text-emerald-300 flex items-center justify-between shrink-0">
-          <span>🎯 穿透模式已生效：鼠标点击将穿透至后方应用</span>
-          <span className="font-mono text-[9px] bg-emerald-900/60 px-1 rounded">Cmd+Shift+P 退出</span>
+        <div className="bg-accent-soft px-3 py-1 text-[11px] text-accent-text flex items-center justify-between shrink-0">
+          <span>穿透模式已生效：鼠标点击将穿透至后方应用</span>
+          <Kbd>⇧⌘P 退出</Kbd>
         </div>
       )}
 
-      {errorMessage && <div className="text-xs text-red-300 px-3 py-1" role="alert">{errorMessage}</div>}
+      {errorMessage && <div className="text-[12px] text-danger px-3 py-1.5 bg-danger-soft" role="alert">{errorMessage}</div>}
       {/* Body: Question & Answer */}
-      <div className="flex-1 flex flex-col p-3 overflow-hidden">
+      <div className="flex-1 flex flex-col px-4 pt-3 pb-3 overflow-hidden">
         {displayedTurn ? (
           <>
-            <div className="pb-2 border-b border-gray-800/70 shrink-0">
-              <div className="text-[11px] font-medium text-emerald-400 truncate">
-                {displayedTurn.question}
-              </div>
+            <div className="text-[13px] font-semibold text-label leading-snug line-clamp-2 shrink-0">
+              {displayedTurn.question}
             </div>
 
-            <div ref={scrollRef} className="flex-1 overflow-y-auto py-2 pr-1 select-text">
+            <div ref={scrollRef} className="flex-1 overflow-y-auto pt-2 pr-1 select-text">
               <AnswerContent text={displayedTurn.answer || '等待生成...'}/>
             </div>
 
             {displayedTurn.citationWarning && (
-              <div className="my-1.5 p-1.5 bg-amber-950/80 border border-amber-600/70 rounded text-[10px] text-amber-200 shrink-0">
-                ⚠️ {displayedTurn.citationWarning}
+              <div className="mt-2 rounded-lg bg-warning-soft px-2.5 py-1.5 text-[11px] text-warning shrink-0">
+                {displayedTurn.citationWarning}
               </div>
             )}
 
             {/* Citations Expand Bar */}
             {(displayedTurn.citations || []).length > 0 && (
-              <div className="pt-2 border-t border-gray-800/70 flex items-center justify-between shrink-0">
-                <button
-                  onClick={() => setShowCitations(!showCitations)}
-                  className="text-[10px] text-emerald-400 hover:underline flex items-center space-x-1"
-                >
+              <div className="pt-2 mt-2 border-t border-separator flex items-center shrink-0">
+                <button onClick={() => setShowCitations(!showCitations)} className="text-[11px] text-accent-text hover:underline flex items-center gap-1">
                   <FileText size={11} />
                   <span>{showCitations ? '隐藏引用' : `展开 ${(displayedTurn.citations || []).length} 处引用资料`}</span>
                 </button>
@@ -228,17 +183,17 @@ export const FloatingWindowView: React.FC = () => {
             )}
 
             {showCitations && (displayedTurn.citations || []).length > 0 && (
-              <div className="max-h-24 overflow-y-auto mt-1 p-2 bg-gray-900 rounded border border-gray-800 text-[10px] text-gray-300 space-y-1">
+              <div className="max-h-24 overflow-y-auto mt-1.5 rounded-lg bg-fill px-2.5 py-2 text-[11px] text-label-2 space-y-1">
                 {(displayedTurn.citations || []).map(c => (
                   <div key={c.id} className="truncate">
-                    <strong className="text-emerald-400">[资料{c.citationIndex}]</strong> {c.fileName} ({c.sectionPath}): {c.snippet}
+                    <strong className="text-accent-text font-medium">资料{c.citationIndex}</strong> {c.fileName} ({c.sectionPath}): {c.snippet}
                   </div>
                 ))}
               </div>
             )}
           </>
         ) : (
-          <div className="flex-1 flex items-center justify-center text-xs text-gray-500">
+          <div className="flex-1 flex items-center justify-center text-[12px] text-label-3">
             暂无回答，在主窗口输入问题开始辅导
           </div>
         )}
