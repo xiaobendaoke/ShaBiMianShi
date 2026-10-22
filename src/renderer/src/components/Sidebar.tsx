@@ -2,15 +2,15 @@ import React from 'react';
 import {
   MessageSquare,
   BookOpen,
-  Settings,
+  Settings2,
   History,
   Cpu,
   Layers,
   ShieldCheck,
-  ShieldAlert,
-  ChevronLeft,
-  ChevronRight
+  Shield,
+  PanelLeft
 } from 'lucide-react';
+import {cx} from './ui';
 
 export type NavTab = 'copilot' | 'knowledge' | 'history' | 'models' | 'settings';
 
@@ -25,6 +25,14 @@ interface SidebarProps {
   children?: React.ReactNode;
 }
 
+const navItems = [
+  { id: 'copilot', label: '面试辅助', icon: MessageSquare },
+  { id: 'knowledge', label: '知识库', icon: BookOpen },
+  { id: 'history', label: '会话记录', icon: History },
+  { id: 'models', label: '模型与 API', icon: Cpu },
+  { id: 'settings', label: '面试配置', icon: Settings2 }
+] as const;
+
 export const Sidebar: React.FC<SidebarProps> = ({
   currentTab,
   onSelectTab,
@@ -35,125 +43,57 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onToggleCollapse,
   children
 }) => {
-  const navItems = [
-    { id: 'copilot', label: '面试辅助', icon: MessageSquare },
-    { id: 'knowledge', label: '知识库', icon: BookOpen },
-    { id: 'history', label: '会话记录', icon: History },
-    { id: 'models', label: '模型与 API', icon: Cpu },
-    { id: 'settings', label: '面试配置', icon: Settings }
-  ] as const;
-
+  const row = (active: boolean) => cx(
+    'w-full flex items-center h-8 rounded-lg text-[13px] transition-colors',
+    collapsed ? 'justify-center' : 'gap-2.5 px-2.5',
+    active ? 'bg-surface text-label font-medium shadow-[0_1px_2px_rgba(0,0,0,0.08),0_0_0_0.5px_rgba(0,0,0,0.04)]' : 'text-label-2 hover:bg-fill hover:text-label'
+  );
   return (
-    <aside
-      className={`${
-        collapsed ? 'w-14' : 'w-52'
-      } bg-gray-950 border-r border-gray-800 flex flex-col justify-between select-none transition-all duration-200 shrink-0`}
-    >
-      <div className="flex flex-col flex-1 min-h-0">
-        {/* Brand Header */}
-        <div
-          className={`border-b border-gray-800/80 flex items-center ${
-            collapsed ? 'p-2.5 justify-center' : 'p-3.5 justify-between'
-          }`}
-        >
-          <div className="flex items-center space-x-2.5 overflow-hidden">
-            <div
-              onClick={onToggleCollapse}
-              className="w-8 h-8 rounded-lg bg-emerald-600 flex items-center justify-center font-black text-white text-xs tracking-wider shadow-md shadow-emerald-900/40 shrink-0 cursor-pointer hover:bg-emerald-500 transition-colors"
-              title={collapsed ? '展开侧边栏' : '傻逼面试'}
-            >
-              SB
-            </div>
-            {!collapsed && (
-              <div className="overflow-hidden">
-                <h1 className="font-semibold text-sm text-gray-100 tracking-tight truncate">傻逼面试</h1>
-              </div>
-            )}
-          </div>
-
-          {!collapsed && onToggleCollapse && (
-            <button
-              onClick={onToggleCollapse}
-              className="text-gray-400 hover:text-gray-200 p-1 rounded-md hover:bg-gray-800 transition-colors"
-              title="收起侧边栏"
-            >
-              <ChevronLeft size={16} />
-            </button>
-          )}
-        </div>
-
-        {/* Navigation Items */}
-        <nav className="p-2 space-y-1">
-          {navItems.map((item) => {
-            const Icon = item.icon;
-            const isActive = currentTab === item.id;
-            return (
-              <button
-                key={item.id}
-                onClick={() => onSelectTab(item.id)}
-                title={collapsed ? item.label : undefined}
-                className={`w-full flex items-center ${
-                  collapsed ? 'justify-center px-0 py-2.5' : 'space-x-3 px-3 py-2.5'
-                } rounded-lg text-xs font-medium transition-all ${
-                  isActive
-                    ? 'bg-emerald-600/20 text-emerald-400 border border-emerald-500/30'
-                    : 'text-gray-400 hover:text-gray-200 hover:bg-gray-900 border border-transparent'
-                }`}
-              >
-                <Icon size={16} className={isActive ? 'text-emerald-400' : 'text-gray-400'} />
-                {!collapsed && <span className="truncate">{item.label}</span>}
-              </button>
-            );
-          })}
-        </nav>
-        {children}
-      </div>
-
-      {/* Footer Controls */}
-      <div className={`p-2 border-t border-gray-800/80 space-y-2 ${collapsed ? 'flex flex-col items-center' : ''}`}>
-        {collapsed && onToggleCollapse && (
-          <button
-            onClick={onToggleCollapse}
-            className="w-9 h-9 flex items-center justify-center text-gray-400 hover:text-gray-200 hover:bg-gray-800 rounded-lg transition-colors"
-            title="展开侧边栏"
-          >
-            <ChevronRight size={16} />
+    <aside className={cx(collapsed ? 'w-[64px]' : 'w-[248px]', 'bg-sidebar border-r border-separator flex flex-col select-none transition-[width] duration-200 shrink-0')}>
+      {/* Titlebar zone: the traffic lights sit here. */}
+      <div className={cx('titlebar-drag h-[52px] shrink-0 flex items-center', collapsed ? 'justify-center pt-8' : 'justify-end px-3')}>
+        {onToggleCollapse && (
+          <button onClick={onToggleCollapse} className="h-7 w-7 inline-flex items-center justify-center rounded-md text-label-2 hover:bg-fill hover:text-label" title={collapsed ? '展开侧边栏' : '收起侧边栏'}>
+            <PanelLeft size={16} strokeWidth={1.75} />
           </button>
         )}
+      </div>
 
-        <button
-          onClick={onToggleFloating}
-          className={`${
-            collapsed ? 'w-9 h-9 p-0' : 'w-full px-3 py-2 space-x-2'
-          } flex items-center justify-center bg-gray-900 hover:bg-gray-800 border border-gray-700/60 rounded-lg text-xs text-gray-300 transition-colors`}
-          title="独立悬浮窗 (Cmd+Shift+Space)"
-        >
-          <Layers size={14} className="text-emerald-400 shrink-0" />
-          {!collapsed && <span className="truncate">独立悬浮窗</span>}
+      {!collapsed && (
+        <div className="px-4 pt-1 pb-4 flex items-center gap-2.5">
+          <div className="h-8 w-8 rounded-[9px] bg-gradient-to-br from-[#0894ff] via-[#c959dd] to-[#ff9004] text-white flex items-center justify-center text-[11px] font-black tracking-tight shadow-[inset_0_1px_0_rgba(255,255,255,0.4),0_2px_6px_rgba(0,0,0,0.15)]">SB</div>
+          <div className="min-w-0">
+            <div className="text-[14px] font-semibold tracking-[-0.01em] text-label leading-tight">傻逼面试</div>
+            <div className="text-[11px] text-label-3 leading-tight">Interview Copilot</div>
+          </div>
+        </div>
+      )}
+
+      <nav className={cx('px-2.5 space-y-0.5', collapsed && 'pt-6')}>
+        {navItems.map(item => {
+          const Icon = item.icon;
+          const active = currentTab === item.id;
+          return (
+            <button key={item.id} onClick={() => onSelectTab(item.id)} title={collapsed ? item.label : undefined} aria-current={active ? 'true' : undefined} className={row(active)}>
+              <Icon size={16} strokeWidth={1.75} className={active ? 'text-accent' : ''} />
+              {!collapsed && <span className="truncate">{item.label}</span>}
+            </button>
+          );
+        })}
+      </nav>
+
+      {children}
+
+      <div className="px-2.5 py-2.5 border-t border-separator space-y-0.5">
+        <button onClick={onToggleFloating} className={row(false)} title="独立悬浮窗 (Cmd+Shift+Space)">
+          <Layers size={16} strokeWidth={1.75} />
+          {!collapsed && <span className="truncate flex-1 text-left">独立悬浮窗</span>}
+          {!collapsed && <span className="text-[11px] text-label-3">⇧⌘Space</span>}
         </button>
-
-        <button
-          onClick={onToggleProtection}
-          className={`${
-            collapsed ? 'w-9 h-9 p-0' : 'w-full px-2 py-1.5 space-x-1.5 text-[11px]'
-          } flex items-center justify-center rounded-lg transition-colors ${
-            contentProtected
-              ? 'bg-emerald-950/40 border border-emerald-800 text-emerald-400'
-              : 'bg-gray-900 border border-gray-800 text-gray-400 hover:text-gray-300'
-          }`}
-          title={contentProtected ? '防窥保护: 已开启' : '防窥保护: 未开启'}
-        >
-          {contentProtected ? (
-            <>
-              <ShieldCheck size={13} className="shrink-0" />
-              {!collapsed && <span className="truncate">防窥保护: 已开启</span>}
-            </>
-          ) : (
-            <>
-              <ShieldAlert size={13} className="shrink-0" />
-              {!collapsed && <span className="truncate">防窥保护: 未开启</span>}
-            </>
-          )}
+        <button onClick={onToggleProtection} className={row(false)} title={contentProtected ? '防窥保护: 已开启' : '防窥保护: 未开启'}>
+          {contentProtected ? <ShieldCheck size={16} strokeWidth={1.75} className="text-success" /> : <Shield size={16} strokeWidth={1.75} />}
+          {!collapsed && <span className="truncate flex-1 text-left">防窥保护</span>}
+          {!collapsed && <span className={cx('text-[11px]', contentProtected ? 'text-success' : 'text-label-3')}>{contentProtected ? '已开启' : '未开启'}</span>}
         </button>
       </div>
     </aside>

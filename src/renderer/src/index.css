@@ -1,27 +1,235 @@
 @import "tailwindcss";
 
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+/*
+ * Design tokens. Light and dark follow the system appearance, using the macOS
+ * system palette: one accent (Apple blue), neutral greys and hairline separators.
+ */
+:root {
+  color-scheme: light dark;
+  --canvas: #f5f5f7;
+  --sidebar: rgba(236, 236, 241, 0.72);
+  --surface: #ffffff;
+  --elevated: #ffffff;
+  --fill: rgba(0, 0, 0, 0.05);
+  --fill-strong: rgba(0, 0, 0, 0.08);
+  --separator: rgba(0, 0, 0, 0.09);
+  --label: #1d1d1f;
+  --label-2: #6e6e73;
+  --label-3: #a1a1a6;
+  --accent: #0071e3;
+  --accent-hover: #0077ed;
+  --accent-soft: rgba(0, 113, 227, 0.1);
+  --accent-text: #0066cc;
+  --success: #248a3d;
+  --success-soft: rgba(52, 199, 89, 0.14);
+  --warning: #b25000;
+  --warning-soft: rgba(255, 159, 10, 0.14);
+  --danger: #d70015;
+  --danger-soft: rgba(255, 59, 48, 0.1);
+  --code: #f5f5f7;
+  --aurora-a: rgba(10, 132, 255, 0.10);
+  --aurora-b: rgba(191, 90, 242, 0.08);
+  --aurora-c: rgba(255, 105, 97, 0.06);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.04), 0 4px 16px rgba(0, 0, 0, 0.06);
+  --shadow-pop: 0 2px 6px rgba(0, 0, 0, 0.06), 0 16px 48px rgba(0, 0, 0, 0.14);
 }
 
-::-webkit-scrollbar-track {
-  background: rgba(31, 41, 55, 0.5);
+@media (prefers-color-scheme: dark) {
+  :root {
+    --canvas: #0c0c0e;
+    --sidebar: rgba(28, 28, 30, 0.6);
+    --surface: #1c1c1e;
+    --elevated: #232325;
+    --fill: rgba(255, 255, 255, 0.06);
+    --fill-strong: rgba(255, 255, 255, 0.11);
+    --separator: rgba(255, 255, 255, 0.09);
+    --label: #f5f5f7;
+    --label-2: #a1a1a6;
+    --label-3: #6e6e73;
+    --accent: #0a84ff;
+    --accent-hover: #409cff;
+    --accent-soft: rgba(10, 132, 255, 0.18);
+    --accent-text: #4aa3ff;
+    --success: #30d158;
+    --success-soft: rgba(48, 209, 88, 0.16);
+    --warning: #ffb340;
+    --warning-soft: rgba(255, 159, 10, 0.16);
+    --danger: #ff6961;
+    --danger-soft: rgba(255, 69, 58, 0.16);
+    --code: #141416;
+    --aurora-a: rgba(10, 132, 255, 0.16);
+    --aurora-b: rgba(191, 90, 242, 0.12);
+    --aurora-c: rgba(255, 105, 97, 0.07);
+    --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 16px rgba(0, 0, 0, 0.25);
+    --shadow-pop: 0 2px 8px rgba(0, 0, 0, 0.35), 0 20px 56px rgba(0, 0, 0, 0.5);
+  }
 }
 
+@theme inline {
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Helvetica Neue", sans-serif;
+  --font-mono: "SF Mono", ui-monospace, Menlo, Monaco, monospace;
+  --color-canvas: var(--canvas);
+  --color-sidebar: var(--sidebar);
+  --color-surface: var(--surface);
+  --color-elevated: var(--elevated);
+  --color-fill: var(--fill);
+  --color-fill-strong: var(--fill-strong);
+  --color-separator: var(--separator);
+  --color-label: var(--label);
+  --color-label-2: var(--label-2);
+  --color-label-3: var(--label-3);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-text: var(--accent-text);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-code: var(--code);
+  --shadow-card: var(--shadow-card);
+  --shadow-pop: var(--shadow-pop);
+}
+
+html, body {
+  background: transparent;
+  color: var(--label);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+  letter-spacing: -0.003em;
+}
+
+button { cursor: default; }
+input, textarea, select { font: inherit; color: inherit; }
+::selection { background: var(--accent-soft); }
+
+:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  outline-offset: 1px;
+  border-radius: 6px;
+}
+
+summary { list-style: none; cursor: default; }
+summary::-webkit-details-marker { display: none; }
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
-  background: rgba(75, 85, 99, 0.8);
-  border-radius: 3px;
+  background: var(--fill-strong);
+  border: 3px solid transparent;
+  background-clip: content-box;
+  border-radius: 10px;
+}
+::-webkit-scrollbar-thumb:hover { background-color: var(--label-3); }
+
+.select-chevron {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%2386868b' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-size: 9px;
+  background-position: right 7px center;
 }
 
-::-webkit-scrollbar-thumb:hover {
-  background: rgba(107, 114, 128, 1);
-}
-
-.titlebar-drag {
-  -webkit-app-region: drag;
-}
-
-.no-drag {
+.titlebar-drag { -webkit-app-region: drag; }
+.no-drag { -webkit-app-region: no-drag; }
+.titlebar-drag button, .titlebar-drag input, .titlebar-drag select, .titlebar-drag summary, .titlebar-drag label, .titlebar-drag a {
   -webkit-app-region: no-drag;
+}
+
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+.animate-fade-up { animation: fade-up 0.22s ease-out both; }
+
+@keyframes caret-blink { 50% { opacity: 0; } }
+.streaming-caret::after {
+  content: "";
+  display: inline-block;
+  width: 0.5em;
+  height: 1.1em;
+  margin-left: 2px;
+  vertical-align: -0.18em;
+  border-radius: 2px;
+  background: var(--accent);
+  animation: caret-blink 1s steps(1) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 3px;
+  border-radius: 3px;
+  background: var(--fill-strong);
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.2), 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+/* ---- Signature effects ------------------------------------------------ */
+
+/* Soft aurora wash behind the main canvas. */
+.aurora {
+  background:
+    radial-gradient(60% 50% at 85% 0%, var(--aurora-a), transparent 70%),
+    radial-gradient(50% 45% at 10% 15%, var(--aurora-b), transparent 70%),
+    radial-gradient(55% 50% at 60% 100%, var(--aurora-c), transparent 70%),
+    var(--canvas);
+}
+
+/* Apple Intelligence palette, used for gradient text and the glow ring. */
+.text-intelligence {
+  background: linear-gradient(90deg, #0894ff 0%, #c959dd 34%, #ff2e54 68%, #ff9004 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+@property --glow-angle {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+@keyframes glow-spin { to { --glow-angle: 360deg; } }
+
+/* A rotating multicolour ring plus a blurred halo; toggled by .glow-on or focus. */
+.glow { position: relative; isolation: isolate; }
+.glow::before, .glow::after {
+  content: "";
+  position: absolute;
+  border-radius: inherit;
+  pointer-events: none;
+  background: conic-gradient(from var(--glow-angle), #0894ff, #c959dd, #ff2e54, #ff9004, #ffd60a, #0894ff);
+  opacity: 0;
+  transition: opacity 0.35s ease;
+  animation: glow-spin 5s linear infinite;
+}
+.glow::before {
+  inset: -1.5px;
+  padding: 1.5px;
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  z-index: 1;
+}
+.glow::after { inset: -2px; filter: blur(18px); z-index: -1; }
+.glow.glow-on::before, .glow-focus:focus-within::before { opacity: 1; }
+.glow.glow-on::after { opacity: 0.45; }
+.glow-focus:focus-within::after { opacity: 0.28; }
+
+.glass {
+  background: color-mix(in srgb, var(--surface) 78%, transparent);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  backdrop-filter: saturate(180%) blur(20px);
 }

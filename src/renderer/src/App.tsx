@@ -94,7 +94,7 @@ function WorkspaceApp() {
   };
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-gray-900 text-gray-100 font-sans">
+    <div className="flex h-screen w-screen overflow-hidden text-label font-sans">
       <Sidebar
         currentTab={currentTab}
         onSelectTab={setCurrentTab}
@@ -107,7 +107,7 @@ function WorkspaceApp() {
         <SessionList sessions={sessions} currentId={currentSession?.id} collapsed={sidebarCollapsed} onExpand={handleToggleSidebar} onSelect={selectSession} onCreate={createSession} onRename={renameSession} onDelete={deleteSession}/>
       </Sidebar>
 
-      <main className="flex-1 flex overflow-hidden">
+      <main className="flex-1 flex min-w-0 overflow-hidden bg-canvas">
         <div className="flex flex-1 overflow-hidden" style={{display: currentTab === 'copilot' ? 'flex' : 'none'}}>
           <CopilotView currentSession={currentSession} libraries={libraries} onSessionChange={updateLocalSession} />
         </div>

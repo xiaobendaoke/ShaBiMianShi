@@ -19,6 +19,8 @@ export default defineConfig({
     electron([
       {
         entry: path.resolve(__dirname, 'src/main/index.ts'),
+        // root is src/renderer; launch Electron from the project root.
+        onstart({startup}) { startup(['.', '--no-sandbox'], {cwd: __dirname}); },
         vite: {
           define: buildDefines,
           build: {
@@ -31,6 +33,8 @@ export default defineConfig({
       },
       {
         entry: path.resolve(__dirname, 'src/preload/index.ts'),
+        // root is src/renderer; launch Electron from the project root.
+        onstart({startup}) { startup(['.', '--no-sandbox'], {cwd: __dirname}); },
         vite: {
           define: buildDefines,
           build: {
