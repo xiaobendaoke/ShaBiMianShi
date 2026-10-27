@@ -1,6 +1,6 @@
 import electron from 'electron';
 import type { BrowserWindow } from 'electron';
-const { screen, app } = electron;
+const { screen, app, nativeTheme } = electron;
 const BrowserWindowConstructor = electron.BrowserWindow;
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -42,18 +42,19 @@ export class WindowManager {
       return this.mainWindow;
     }
 
+    // The UI is white-only; keep native controls and menus light as well.
+    if (nativeTheme) nativeTheme.themeSource = 'light';
+
     this.mainWindow = new BrowserWindowConstructor({
       width: 1200,
       height: 800,
       minWidth: 900,
       minHeight: 600,
       title: '傻逼面试 - 知识库与面试辅助',
-      // Unified toolbar: traffic lights inset into the translucent sidebar.
+      // Unified toolbar: traffic lights inset into the white sidebar.
       titleBarStyle: 'hiddenInset',
       trafficLightPosition: { x: 18, y: 18 },
-      vibrancy: 'sidebar',
-      visualEffectState: 'followWindow',
-      backgroundColor: '#00000000',
+      backgroundColor: '#ffffff',
       webPreferences: {
         preload: path.join(__dirname, '../preload/index.js'),
         contextIsolation: true,
