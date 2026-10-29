@@ -158,45 +158,13 @@ input[type="range"]::-webkit-slider-thumb {
     var(--canvas);
 }
 
-/* Apple Intelligence palette, used for gradient text and the glow ring. */
+/* Apple Intelligence palette, used for gradient text. */
 .text-intelligence {
   background: linear-gradient(90deg, #0894ff 0%, #c959dd 34%, #ff2e54 68%, #ff9004 100%);
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
 }
-
-@property --glow-angle {
-  syntax: "<angle>";
-  inherits: false;
-  initial-value: 0deg;
-}
-@keyframes glow-spin { to { --glow-angle: 360deg; } }
-
-/* A rotating multicolour ring plus a blurred halo; toggled by .glow-on or focus. */
-.glow { position: relative; isolation: isolate; }
-.glow::before, .glow::after {
-  content: "";
-  position: absolute;
-  border-radius: inherit;
-  pointer-events: none;
-  background: conic-gradient(from var(--glow-angle), #0894ff, #c959dd, #ff2e54, #ff9004, #ffd60a, #0894ff);
-  opacity: 0;
-  transition: opacity 0.35s ease;
-  animation: glow-spin 5s linear infinite;
-}
-.glow::before {
-  inset: -1.5px;
-  padding: 1.5px;
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-  mask-composite: exclude;
-  z-index: 1;
-}
-.glow::after { inset: -2px; filter: blur(18px); z-index: -1; }
-.glow.glow-on::before, .glow-focus:focus-within::before { opacity: 1; }
-.glow.glow-on::after { opacity: 0.45; }
-.glow-focus:focus-within::after { opacity: 0.28; }
 
 .glass {
   background: color-mix(in srgb, var(--surface) 78%, transparent);

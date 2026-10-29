@@ -40,7 +40,7 @@ async function compileComponent(project, directory, name) {
         a.path === 'react/jsx-runtime' ? 'export const jsx=(type,props)=>({type,props});export const jsxs=jsx;export const Fragment="fragment";' :
         'export const ' + names.map(n => `${n}=${JSON.stringify(n)}`).join(',') + ';' }));
       b.onLoad({ filter: /(?:CopilotView|FloatingWindowView)\.tsx$/ }, () => {
-        const exposure = name === 'CopilotView' ? '{handleSend,handleStop,select:setCurrentTurn}' : '{handleTogglePin}';
+        const exposure = name === 'CopilotView' ? '{handleSend,handleStop,select:selectHistoryTurn,resumeFollowing,navigation:navigation.current}' : '{handleTogglePin}';
         const modified = source.replace('  return (\n    <div', `  globalThis.__componentTest.exposed=${exposure};\n  return (\n    <div`);
         assert.notEqual(modified, source, 'Test exposure anchor must exist');
         return { contents: modified, loader: 'tsx' };
@@ -56,6 +56,7 @@ exports.runComponentContracts = async (project, directory) => {
   global.alert = message => { throw new Error('Unexpected alert: ' + message); };
   global.window = { api: {
     selectSession: async () => {}, getActiveTurn: async () => null, getTurns: async () => [],
+    onChatStreamStart: cb => (h.callbacks.start = cb, () => {}),
     onChatStreamToken: cb => (h.callbacks.token = cb, () => {}),
     onChatStreamComplete: cb => (h.callbacks.complete = cb, () => {}),
     onChatStreamError: cb => (h.callbacks.error = cb, () => {}),
@@ -91,6 +92,25 @@ exports.runComponentContracts = async (project, directory) => {
   assert.equal(h.slots[2].id, a.id);
   assert.equal(h.slots[3], false);
   results.push('Actual CopilotView: stale A token/complete/error cannot modify B; history selection is independent');
+
+  // 停留：选中历史题后，新题开始/推进/结束都不得抢走选中
+  const c = { id: 'c', sessionId: 's1', question: 'C', answer: '', status: 'streaming', citations: [], createdAt: Date.now() + 100 };
+  const d = { ...c, id: 'd', question: 'D', createdAt: c.createdAt + 1 };
+  for (const turn of [c, d]) {
+    h.callbacks.start({ sessionId: 's1', turnId: turn.id, turn }); render();
+    h.callbacks.token({ sessionId: 's1', turnId: turn.id, token: 'new answer' });
+    h.callbacks.complete({ sessionId: 's1', turnId: turn.id, turn: { ...turn, answer: 'final', status: 'completed' } });
+    assert.equal(h.slots[2].id, a.id, 'New starts/tokens/completions must preserve history selection');
+  }
+  render();
+  assert.equal(h.exposed.navigation.unread(h.slots[1]), 2);
+  h.exposed.resumeFollowing(); render();
+  assert.equal(h.slots[2].id, d.id);
+  assert.equal(h.slots[2].answer, 'final');
+  const e = { ...d, id: 'e', createdAt: d.createdAt + 1 };
+  h.callbacks.start({ sessionId: 's1', turnId: e.id, turn: e }); render();
+  assert.equal(h.slots[2].id, e.id, 'Return latest restores automatic following');
+  results.push('Actual CopilotView: multiple new questions preserve history; return latest resumes following');
 
   props = { currentSession: { id: 's2', libraryIds: [] }, libraries: [] };
   render(); await new Promise(r => setTimeout(r, 0)); render();

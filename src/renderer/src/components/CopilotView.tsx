@@ -37,6 +37,7 @@ import { SessionRecord, TurnRecord, CitationSnapshot, Library, ChunkRecord, Imag
 import {MemoryPanel} from './MemoryPanel';
 import { AudioPanel } from './AudioPanel';
 import { Badge, Kbd, Notice, Segmented, button, cx, selectField, textArea } from './ui';
+import { TurnNavigation } from '../turnNavigation';
 
 
 interface CopilotViewProps {
@@ -62,8 +63,11 @@ export const CopilotView: React.FC<CopilotViewProps> = ({ currentSession, librar
   const [inspectorMode, setInspectorMode] = useState<'snippet' | 'neighbors' | 'full'>('snippet');
 
   // Column collapsible states
-  const [showLeftCol, setShowLeftCol] = useState(false);
+  // 历史记录栏默认展开（旧版布局）；顶部横向胶囊条已移除
+  const [showLeftCol, setShowLeftCol] = useState(true);
   const [showRightCol, setShowRightCol] = useState(false);
+  // 停留模式：false 表示正在浏览历史题，新题不再抢焦点
+  const [followingLatest, setFollowingLatest] = useState(true);
 
   const [isCapturing, setIsCapturing] = useState(false);
   const [images, setImages] = useState<ImageAttachment[]>([]);
@@ -74,15 +78,32 @@ export const CopilotView: React.FC<CopilotViewProps> = ({ currentSession, librar
   const [scopeOpen, setScopeOpen] = useState(false);
   const commandRef = useRef<(command: string) => void>(() => {});
   const answerScrollRef = useRef<HTMLDivElement>(null);
+  const navigation = useRef(new TurnNavigation());
 
   const activeTurnRef = useRef<{ sessionId: string; turnId: string } | null>(null);
   const stoppedTurnsRef = useRef(new Set<string>());
   const currentSessionRef = useRef(currentSession?.id);
   currentSessionRef.current = currentSession?.id;
 
+  const latestTurn = (rows: TurnRecord[]) => rows.reduce<TurnRecord | null>(
+    (latest, turn) => (!latest || turn.createdAt >= latest.createdAt ? turn : latest), null);
+  // 点选历史题目后停留：后续新题开始生成也不再抢走当前显示。
+  const selectHistoryTurn = (turn: TurnRecord) => {
+    navigation.current.pause(turns);
+    setFollowingLatest(false);
+    setCurrentTurn(turn);
+  };
+  const resumeFollowing = () => {
+    navigation.current.reset();
+    setFollowingLatest(true);
+    setCurrentTurn(latestTurn(turns));
+  };
+  const unreadCount = followingLatest ? 0 : navigation.current.unread(turns);
+
   useEffect(() => {
     let mounted = true;
     const sessionId = currentSession?.id;
+    navigation.current.reset(); setFollowingLatest(true);
     activeTurnRef.current = null;
     setIsGenerating(false); setTurns([]); setCurrentTurn(null); setImages([]); setPreview(null); setErrorMessage(''); setQuestionInput(''); setSelectedCitation(null); setNeighborChunks(null); setFullDocText(null);
     if (sessionId) void (async () => {
@@ -92,7 +113,7 @@ export const CopilotView: React.FC<CopilotViewProps> = ({ currentSession, librar
         const snapshot: TurnRecord | null = await (window as any).api.getActiveTurn?.() ?? null;
         if (!mounted || activeTurnRef.current || currentSessionRef.current !== sessionId) return;
         const latest = snapshot?.sessionId === sessionId ? snapshot : records.at(-1) ?? null;
-        setTurns(records); setCurrentTurn(latest);
+        setTurns(records); setCurrentTurn(previous => navigation.current.following ? latest : previous);
         if (latest?.status === 'streaming' && !stoppedTurnsRef.current.has(latest.id)) {
           activeTurnRef.current = { sessionId, turnId: latest.id };
           setIsGenerating(true);
@@ -118,7 +139,8 @@ export const CopilotView: React.FC<CopilotViewProps> = ({ currentSession, librar
       activeTurnRef.current = {sessionId: payload.sessionId, turnId: payload.turnId};
       setIsGenerating(true);
       const turn = payload.turn || {id: payload.turnId, sessionId: payload.sessionId, question: payload.question, role: 'assistant', answer: '', status: 'streaming', citations: [], createdAt: payload.createdAt};
-      setTurns(rows => [...rows.filter(t => t.id !== turn.id), turn]); setCurrentTurn(turn);
+      setTurns(rows => [...rows.filter(t => t.id !== turn.id), turn].sort((a, b) => a.createdAt - b.createdAt));
+      setCurrentTurn(previous => navigation.current.shouldDisplay(previous, turn) ? turn : previous);
     });
     const unsubQueued = (window as any).api.onChatQueued?.((payload: any) => {
       if (payload.sessionId === currentSessionRef.current) void (window as any).api.getTurns(payload.sessionId).then((rows: TurnRecord[]) => {if(currentSessionRef.current === payload.sessionId) setTurns(previous=>rows.map(row=>{const live=previous.find(t=>t.id===row.id);return live?.status==='streaming'&&row.status==='streaming'?live:row;}));});
@@ -214,6 +236,7 @@ export const CopilotView: React.FC<CopilotViewProps> = ({ currentSession, librar
     };
     if (!queued) activeTurnRef.current = { sessionId: currentSession.id, turnId: tempTurnId };
     setTurns(prev => [...prev, tempTurn]);
+    navigation.current.reset(); setFollowingLatest(true);
     setCurrentTurn(tempTurn);
 
     try {
@@ -267,8 +290,8 @@ export const CopilotView: React.FC<CopilotViewProps> = ({ currentSession, librar
     if (command === 'scroll-up') answerScrollRef.current?.scrollBy({top: -160});
     if (command === 'scroll-down') answerScrollRef.current?.scrollBy({top: 160});
     const index = turns.findIndex(t => t.id === currentTurn?.id);
-    if (command === 'previous' && index > 0) setCurrentTurn(turns[index-1]);
-    if (command === 'next' && index < turns.length-1) setCurrentTurn(turns[index+1]);
+    if (command === 'previous' && index > 0) selectHistoryTurn(turns[index-1]);
+    if (command === 'next' && index < turns.length-1) selectHistoryTurn(turns[index+1]);
   };
   const saveSessionFields = (fields: Partial<SessionRecord>) => {
     if (!currentSession) return;
@@ -325,16 +348,22 @@ export const CopilotView: React.FC<CopilotViewProps> = ({ currentSession, librar
       {showLeftCol && (
         <aside className="w-[264px] shrink-0 border-r border-separator flex flex-col min-h-0 glass">
           <div className="titlebar-drag h-[52px] shrink-0 flex items-center justify-between pl-4 pr-2 border-b border-separator">
-            <div className="text-[13px] font-semibold text-label">本场问题 <span className="font-normal text-label-3">{turns.length}</span></div>
-            <button onClick={() => setShowLeftCol(false)} className={button.icon} title="折叠问题栏"><PanelLeft size={16} strokeWidth={1.75} /></button>
+            <div className="text-[13px] font-semibold text-label">本场问答记录 <span className="font-normal text-label-3">{turns.length}</span></div>
+            <button onClick={() => setShowLeftCol(false)} className={button.icon} title="折叠记录栏"><PanelLeft size={16} strokeWidth={1.75} /></button>
           </div>
+          {!followingLatest && (
+            <div className="shrink-0 flex items-center justify-between gap-2 px-3 py-2 border-b border-separator text-[11px] text-warning" role="status">
+              <span className="truncate">{unreadCount > 0 ? `有 ${unreadCount} 条新问题` : '已暂停自动跟随'}</span>
+              <button onClick={resumeFollowing} className={cx(button.link, 'h-6 text-[11px] text-warning hover:bg-warning-soft')}>回到最新</button>
+            </div>
+          )}
           <div className="flex-1 overflow-y-auto p-2 space-y-px">
             {turns.length === 0 ? (
               <p className="px-3 py-6 text-center text-[12px] leading-relaxed text-label-3">暂无问答记录，输入问题或点击录音开始</p>
             ) : turns.map((turn, i) => {
               const active = currentTurn?.id === turn.id;
               return (
-                <button key={turn.id} onClick={() => setCurrentTurn(turn)} aria-current={active ? 'true' : undefined}
+                <button key={turn.id} onClick={() => selectHistoryTurn(turn)} aria-current={active ? 'true' : undefined}
                   className={cx('w-full text-left rounded-lg px-2.5 py-2 transition-colors', active ? 'bg-accent-soft' : 'hover:bg-fill')}>
                   <div className={cx('text-[13px] leading-snug line-clamp-2', active ? 'text-label font-medium' : 'text-label')}>
                     <span className="text-label-3 tabular-nums mr-1">{i + 1}</span>{turn.topic || turn.question}
@@ -428,23 +457,6 @@ export const CopilotView: React.FC<CopilotViewProps> = ({ currentSession, librar
           </button>
         </header>
 
-        {/* Question strip */}
-        {turns.length > 0 && (
-          <div className="shrink-0 flex items-center gap-1.5 px-4 pb-2 overflow-x-auto [scrollbar-width:none]">
-            {turns.map((turn, i) => {
-              const active = currentTurn?.id === turn.id;
-              return (
-                <button key={turn.id} onClick={() => setCurrentTurn(turn)} title={turn.topic || turn.question}
-                  className={cx('shrink-0 inline-flex items-center gap-1.5 h-7 pl-2 pr-3 rounded-full text-[12px] transition-all', active ? 'bg-label text-canvas shadow-card' : 'bg-surface/70 text-label-2 hover:text-label hover:bg-surface')}>
-                  <span className={cx('h-1.5 w-1.5 rounded-full', turn.status === 'streaming' ? 'bg-accent animate-pulse' : turn.status === 'queued' ? 'bg-warning' : turn.status === 'error' ? 'bg-danger' : turn.status === 'cancelled' ? 'bg-label-3' : 'bg-success')} />
-                  <span className="tabular-nums font-semibold">{i + 1}</span>
-                  <span className="max-w-[9em] truncate">{turn.topic || turn.question}</span>
-                </button>
-              );
-            })}
-          </div>
-        )}
-
         {/* Answer canvas */}
         <div ref={answerScrollRef} className="flex-1 overflow-y-auto">
           {currentTurn ? (
@@ -495,7 +507,7 @@ export const CopilotView: React.FC<CopilotViewProps> = ({ currentSession, librar
               )}
 
               {/* Answer Stream Body */}
-              <div className={cx('glow mt-6 rounded-[28px]', currentTurn.status === 'streaming' && 'glow-on')}><div className="rounded-[28px] bg-surface shadow-card px-8 py-7 @max-[620px]:px-5 select-text">
+              <div className="mt-6 rounded-[28px]"><div className="rounded-[28px] bg-surface shadow-card px-8 py-7 @max-[620px]:px-5 select-text">
                 {currentTurn.error && <div className="mb-4"><Notice tone="danger">{currentTurn.error}</Notice></div>}
                 {currentTurn.citationWarning && <div className="mb-4"><Notice tone="warning">{currentTurn.citationWarning}</Notice></div>}
                 {currentTurn.options?.action === 'explain' ? <details className="group" open={currentTurn.status === 'streaming' || undefined}><summary className="inline-flex items-center gap-1 text-[13px] font-medium text-accent-text"><ChevronRight size={14} className="transition-transform group-open:rotate-90" />解析（点击展开）</summary><div className="py-3"><AnswerContent text={currentTurn.answer || '正在生成解释…'}/></div></details> : (
@@ -565,7 +577,7 @@ export const CopilotView: React.FC<CopilotViewProps> = ({ currentSession, librar
 
             <AudioPanel sessionId={currentSession?.id} edit={setQuestionInput} />
 
-            <div className={cx('glow glow-focus rounded-[24px]', isGenerating && 'glow-on')}><div className="rounded-[24px] bg-surface shadow-pop">
+            <div className="rounded-[24px]"><div className="rounded-[24px] bg-surface shadow-pop">
               {/* Attached Screenshots Preview */}
               {images.length > 0 && (
                 <div className="flex items-center gap-2 px-3 pt-3 overflow-x-auto">
