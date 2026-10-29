@@ -16,7 +16,7 @@
     "dist": "electron-builder",
     "test:production": "node --import tsx test/productionRegression.ts",
     "test:interview": "tsx test/interviewWorkflow.test.ts",
-    "test:repair": "node --import tsx test/repairSafety.test.ts && node --import tsx test/interviewWorkflow.test.ts && node --import tsx test/productionRegression.ts",
+    "test:repair": "node --import tsx test/turnNavigation.test.ts && node --import tsx test/windowLifecycle.test.ts && node --import tsx test/repairSafety.test.ts && node --import tsx test/interviewWorkflow.test.ts && node --import tsx test/productionRegression.ts",
     "dmg": "node scripts/create-dmg.js"
   },
   "build": {
