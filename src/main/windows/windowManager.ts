@@ -4,6 +4,7 @@ const { screen, app, nativeTheme } = electron;
 const BrowserWindowConstructor = electron.BrowserWindow;
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { sendToWindow } from './sendToWindow';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -167,12 +168,8 @@ export class WindowManager {
   }
 
   public broadcast(channel: string, ...args: any[]) {
-    if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-      this.mainWindow.webContents.send(channel, ...args);
-    }
-    if (this.floatingWindow && !this.floatingWindow.isDestroyed()) {
-      this.floatingWindow.webContents.send(channel, ...args);
-    }
+    sendToWindow(this.mainWindow, channel, ...args);
+    sendToWindow(this.floatingWindow, channel, ...args);
   }
 
   public getMainWindow(): BrowserWindow | null {
