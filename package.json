@@ -3,7 +3,7 @@
   "productName": "傻逼面试",
   "version": "1.0.0",
   "type": "module",
-  "description": "免登录、独立 API、多文档知识库 macOS 面试助手",
+  "description": "免登录、独立 API、多文档知识库桌面面试助手（支持 Windows / macOS）",
   "main": "dist/main/index.js",
   "scripts": {
     "dev": "vite",
@@ -12,12 +12,15 @@
     "test:features": "tsx test/newFeatures.test.ts",
     "test:all": "tsx test/runAllTests.ts && tsx test/regressionP1.ts && tsx test/regressionRound2.ts && tsx test/newFeatures.test.ts",
     "bench": "tsx test/scaleBenchmark.ts",
-    "pack": "node scripts/pack-mac.js",
+    "pack": "node -e \"import(process.platform==='win32'?'./scripts/pack-win.js':'./scripts/pack-mac.js')\"",
+    "pack:win": "node scripts/pack-win.js",
+    "pack:mac": "node scripts/pack-mac.js",
     "dist": "electron-builder",
     "test:production": "node --import tsx test/productionRegression.ts",
     "test:interview": "tsx test/interviewWorkflow.test.ts",
     "test:repair": "node --import tsx test/turnNavigation.test.ts && node --import tsx test/windowLifecycle.test.ts && node --import tsx test/repairSafety.test.ts && node --import tsx test/interviewWorkflow.test.ts && node --import tsx test/productionRegression.ts",
-    "dmg": "node scripts/create-dmg.js"
+    "dmg": "node scripts/create-dmg.js",
+    "zip:win": "node scripts/create-win-zip.js"
   },
   "build": {
     "appId": "com.interviewdog.independent",
@@ -30,6 +33,11 @@
       "package.json",
       "resources/**/*"
     ],
+    "win": {
+      "target": [
+        "dir"
+      ]
+    },
     "mac": {
       "target": [
         "dir"

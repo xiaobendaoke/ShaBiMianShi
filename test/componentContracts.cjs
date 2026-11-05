@@ -41,7 +41,7 @@ async function compileComponent(project, directory, name) {
         'export const ' + names.map(n => `${n}=${JSON.stringify(n)}`).join(',') + ';' }));
       b.onLoad({ filter: /(?:CopilotView|FloatingWindowView)\.tsx$/ }, () => {
         const exposure = name === 'CopilotView' ? '{handleSend,handleStop,select:selectHistoryTurn,resumeFollowing,navigation:navigation.current}' : '{handleTogglePin}';
-        const modified = source.replace('  return (\n    <div', `  globalThis.__componentTest.exposed=${exposure};\n  return (\n    <div`);
+        const modified = source.replace(/  return \(\r?\n    <div/, `  globalThis.__componentTest.exposed=${exposure};\n  return (\n    <div`);
         assert.notEqual(modified, source, 'Test exposure anchor must exist');
         return { contents: modified, loader: 'tsx' };
       });

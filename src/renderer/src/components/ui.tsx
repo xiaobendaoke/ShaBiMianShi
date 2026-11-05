@@ -4,6 +4,13 @@ import React from 'react';
 // CopilotView and FloatingWindowView are bundled by the component contract test,
 // which only provides useState/useRef/useEffect and the icons those files import.
 
+export const isMacPlatform =
+  typeof navigator !== 'undefined'
+    ? /Mac|iPhone|iPod|iPad/i.test(navigator.userAgent || navigator.platform || '')
+    : typeof process !== 'undefined' && process.platform === 'darwin';
+
+export const formatShortcut = (mac: string, win: string) => (isMacPlatform ? mac : win);
+
 export const cx = (...names: Array<string | false | null | undefined>) => names.filter(Boolean).join(' ');
 
 const buttonBase = 'inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-lg font-medium transition-colors disabled:opacity-40 disabled:pointer-events-none select-none';

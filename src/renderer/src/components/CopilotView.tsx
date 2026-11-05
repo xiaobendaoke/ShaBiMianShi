@@ -36,7 +36,7 @@ import { SessionRecord, TurnRecord, CitationSnapshot, Library, ChunkRecord, Imag
 
 import {MemoryPanel} from './MemoryPanel';
 import { AudioPanel } from './AudioPanel';
-import { Badge, Kbd, Notice, Segmented, button, cx, selectField, textArea } from './ui';
+import { Badge, Kbd, Notice, Segmented, button, cx, formatShortcut, selectField, textArea } from './ui';
 import { TurnNavigation } from '../turnNavigation';
 
 
@@ -447,9 +447,9 @@ export const CopilotView: React.FC<CopilotViewProps> = ({ currentSession, librar
 
           {turns.length > 0 && (
             <div className="flex items-center text-[12px] text-label-2">
-              <button onClick={() => commandRef.current('previous')} disabled={turnIndex <= 0} className={button.icon} title="上一题 (Cmd+Alt+←)"><ChevronLeft size={16} /></button>
+              <button onClick={() => commandRef.current('previous')} disabled={turnIndex <= 0} className={button.icon} title={`上一题 (${formatShortcut('Cmd+Alt+←', 'Ctrl+Alt+←')})`}><ChevronLeft size={16} /></button>
               <span className="tabular-nums min-w-[3.2em] text-center">{turnIndex + 1} / {turns.length}</span>
-              <button onClick={() => commandRef.current('next')} disabled={turnIndex >= turns.length - 1} className={button.icon} title="下一题 (Cmd+Alt+→)"><ChevronRight size={16} /></button>
+              <button onClick={() => commandRef.current('next')} disabled={turnIndex >= turns.length - 1} className={button.icon} title={`下一题 (${formatShortcut('Cmd+Alt+→', 'Ctrl+Alt+→')})`}><ChevronRight size={16} /></button>
             </div>
           )}
           <button onClick={() => setShowRightCol(!showRightCol)} className={cx(button.icon, showRightCol && 'bg-fill text-label')} title={showRightCol ? '折叠引用栏' : '展开引用栏'}>
@@ -533,10 +533,10 @@ export const CopilotView: React.FC<CopilotViewProps> = ({ currentSession, librar
               </p>
               <div className="mt-10 grid grid-cols-2 @min-[900px]:grid-cols-4 gap-3 w-full max-w-[880px] text-left">
                 {[
-                  {icon: Mic, title: '语音听题', desc: '系统声音或麦克风，停顿后自动提交', keys: '⇧⌘G', tile: 'from-[#40c8ff] to-[#0a84ff]'},
-                  {icon: Crop, title: '选区解题', desc: '框选题目，多张截图一起作答', keys: '⌥⌘X', tile: 'from-[#da8fff] to-[#bf5af2]'},
+                  {icon: Mic, title: '语音听题', desc: '系统声音或麦克风，停顿后自动提交', keys: formatShortcut('⇧⌘G', 'Ctrl+Shift+G'), tile: 'from-[#40c8ff] to-[#0a84ff]'},
+                  {icon: Crop, title: '选区解题', desc: '框选题目，多张截图一起作答', keys: formatShortcut('⌥⌘X', 'Ctrl+Alt+X'), tile: 'from-[#da8fff] to-[#bf5af2]'},
                   {icon: BookOpen, title: '资料问答', desc: '结合简历与项目文档，引用可追溯', keys: '知识库', tile: 'from-[#ffb340] to-[#ff7a00]'},
-                  {icon: Layers, title: '悬浮窗', desc: '独立显示答案，可鼠标穿透', keys: '⇧⌘Space', tile: 'from-[#5ee0a0] to-[#28b463]'}
+                  {icon: Layers, title: '悬浮窗', desc: '独立显示答案，可鼠标穿透', keys: formatShortcut('⇧⌘Space', 'Ctrl+Shift+Space'), tile: 'from-[#5ee0a0] to-[#28b463]'}
                 ].map(tip => (
                   <div key={tip.title} className="rounded-[22px] bg-surface shadow-card p-5 transition-transform hover:-translate-y-0.5">
                     <div className={cx('h-10 w-10 rounded-[12px] bg-gradient-to-br text-white flex items-center justify-center shadow-[inset_0_1px_0_rgba(255,255,255,0.35)]', tip.tile)}>
@@ -608,11 +608,11 @@ export const CopilotView: React.FC<CopilotViewProps> = ({ currentSession, librar
               />
 
               <div className="flex items-center gap-1 px-2 pb-2">
-                <button disabled={isCapturing || !currentSession} onClick={() => void handleScreenCapture('interactive')} className={cx(button.plain, 'h-7 px-2 text-[12px]')} title="选区截图解题 (快捷键: Cmd+Alt+X)">
+                <button disabled={isCapturing || !currentSession} onClick={() => void handleScreenCapture('interactive')} className={cx(button.plain, 'h-7 px-2 text-[12px]')} title={`选区截图解题 (快捷键: ${formatShortcut('Cmd+Alt+X', 'Ctrl+Alt+X')})`}>
                   {isCapturing ? <Loader2 size={14} className="animate-spin" /> : <Crop size={14} strokeWidth={1.75} />}
                   <span className="@max-[600px]:hidden">选区解题</span>
                 </button>
-                <button disabled={isCapturing || !currentSession} onClick={() => void handleScreenCapture('fullscreen')} className={cx(button.plain, 'h-7 px-2 text-[12px]')} title="全屏截图解题 (快捷键: Cmd+Shift+S)">
+                <button disabled={isCapturing || !currentSession} onClick={() => void handleScreenCapture('fullscreen')} className={cx(button.plain, 'h-7 px-2 text-[12px]')} title={`全屏截图解题 (快捷键: ${formatShortcut('Cmd+Shift+S', 'Ctrl+Shift+S')})`}>
                   <Camera size={14} strokeWidth={1.75} />
                   <span className="@max-[600px]:hidden">全屏</span>
                 </button>

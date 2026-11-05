@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Mic, Loader2, Pause, Play, Zap, Captions, X, AlertCircle } from 'lucide-react';
 import type { TranscriptRecord } from '../../../main/types';
 import { AudioCapture } from '../services/audioCapture';
-import { Notice, button, cx, selectField } from './ui';
+import { Notice, button, cx, formatShortcut, selectField } from './ui';
 
 export function AudioPanel({ sessionId, edit }: { sessionId?: string; edit: (text: string) => void }) {
   const api = (window as any).api;
@@ -183,7 +183,7 @@ export function AudioPanel({ sessionId, edit }: { sessionId?: string; edit: (tex
             <span>连接中…</span>
           </button>
         ) : running ? (
-          <button onClick={stop} className={cx(button.chip, 'bg-danger-soft text-danger hover:bg-danger-soft hover:text-danger pr-3')} title="点击停止监听 (快捷键: Cmd+Shift+G)">
+          <button onClick={stop} className={cx(button.chip, 'bg-danger-soft text-danger hover:bg-danger-soft hover:text-danger pr-3')} title={`点击停止监听 (快捷键: ${formatShortcut('Cmd+Shift+G', 'Ctrl+Shift+G')})`}>
             <span className="relative flex h-2 w-2">
               {!paused && <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-current opacity-60" />}
               <span className="relative inline-flex rounded-full h-2 w-2 bg-current" />
@@ -192,7 +192,7 @@ export function AudioPanel({ sessionId, edit }: { sessionId?: string; edit: (tex
             <span className="text-[11px] opacity-70">· 停止</span>
           </button>
         ) : (
-          <button disabled={!sessionId} onClick={() => void start()} className={button.chip} title="开启实时语音监听 (快捷键: Cmd+Shift+G)">
+          <button disabled={!sessionId} onClick={() => void start()} className={button.chip} title={`开启实时语音监听 (快捷键: ${formatShortcut('Cmd+Shift+G', 'Ctrl+Shift+G')})`}>
             <Mic size={13} />
             <span>开始监听</span>
           </button>
@@ -209,7 +209,7 @@ export function AudioPanel({ sessionId, edit }: { sessionId?: string; edit: (tex
           <button onClick={() => commands.current('listen')} className={cx(button.icon, 'h-7 w-7 rounded-full')} title={paused ? '继续监听' : '暂停监听'}>
             {paused ? <Play size={13} /> : <Pause size={13} />}
           </button>
-          <button onClick={() => void api.answerImmediately().catch((e: any) => setError(e.message))} className={cx(button.chip, 'text-accent-text')} title="立即触发回答 (Cmd+Shift+Enter)">
+          <button onClick={() => void api.answerImmediately().catch((e: any) => setError(e.message))} className={cx(button.chip, 'text-accent-text')} title={`立即触发回答 (${formatShortcut('Cmd+Shift+Enter', 'Ctrl+Shift+Enter')})`}>
             <Zap size={12} />
             <span>立即回答</span>
           </button>
@@ -219,7 +219,7 @@ export function AudioPanel({ sessionId, edit }: { sessionId?: string; edit: (tex
           <input type="checkbox" checked={auto} onChange={e => { setAuto(e.target.checked); void api.controlListening({ auto: e.target.checked }).catch((e: any) => setError(e.message)); }} className="h-3.5 w-3.5 accent-[var(--accent)]" />
           <span>自动回答</span>
         </label>
-        <label className="inline-flex items-center gap-1.5 h-7 px-1.5 text-[12px] text-label-2 hover:text-label" title="自己回答期间开启，避免自己的话再次触发提问 (Cmd+Shift+M)">
+        <label className="inline-flex items-center gap-1.5 h-7 px-1.5 text-[12px] text-label-2 hover:text-label" title={`自己回答期间开启，避免自己的话再次触发提问 (${formatShortcut('Cmd+Shift+M', 'Ctrl+Shift+M')})`}>
           <input type="checkbox" checked={self} onChange={e => { setSelf(e.target.checked); void api.controlListening({ selfSpeaking: e.target.checked }).catch((e: any) => setError(e.message)); }} className="h-3.5 w-3.5 accent-[var(--accent)]" />
           <span>我正在说</span>
         </label>

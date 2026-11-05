@@ -7,11 +7,13 @@ const http = require('node:http');
 const assert = require('node:assert/strict');
 const { pathToFileURL } = require('node:url');
 const project = path.resolve(__dirname, '..');
-const appRoot = process.env.SMOKE_APP_ROOT || JSON.parse(fs.readFileSync(path.join(project,'release/latest-build.json'),'utf8')).path;
+const defaultManifest = process.platform === 'win32' && fs.existsSync(path.join(project, 'release/latest-build-win.json')) ? path.join(project, 'release/latest-build-win.json') : path.join(project, 'release/latest-build.json');
+const appRoot = process.env.SMOKE_APP_ROOT || JSON.parse(fs.readFileSync(defaultManifest,'utf8')).path;
 const data = fs.mkdtempSync(path.join(os.tmpdir(), 'interviewdog-ui-'));
 process.env.INTERVIEWDOG_TEST_DATA_DIR = data;
 process.env.INTERVIEWDOG_TEST_LEGACY_AUDIO='1';
-process.env.INTERVIEWDOG_RESOURCE_DIR = path.join(appRoot,'Contents/Resources/app');
+const resolvedResourceDir = fs.existsSync(path.join(appRoot, 'Contents/Resources/app')) ? path.join(appRoot, 'Contents/Resources/app') : fs.existsSync(path.join(appRoot, 'resources/app')) ? path.join(appRoot, 'resources/app') : path.join(path.dirname(appRoot), 'resources/app');
+process.env.INTERVIEWDOG_RESOURCE_DIR = resolvedResourceDir;
 delete process.env.VITE_DEV_SERVER_URL;
 delete process.env.MOCK_SERVER;
 const output = process.env.SMOKE_OUTPUT_DIR || path.join(data, 'results');
@@ -73,7 +75,7 @@ async function run() {
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const port = server.address().port;
-  await import(pathToFileURL(path.join(appRoot, 'Contents/Resources/app/dist/main/index.js')).href);
+  await import(pathToFileURL(path.join(resolvedResourceDir, 'dist/main/index.js')).href);
   let main;
   await wait(async () => {
     main = BrowserWindow.getAllWindows().find(w => !w.isDestroyed());
@@ -198,4 +200,4 @@ app.whenReady().then(async () => {
     app.quit();
   }
 });
-app.on('quit', () => { fs.rmSync(data, { recursive: true, force: true }); process.exitCode = exitCode; });
+app.on('quit', () => { try { fs.rmSync(data, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); } catch {} process.exitCode = exitCode; });

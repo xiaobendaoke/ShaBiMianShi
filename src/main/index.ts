@@ -685,6 +685,7 @@ function registerIpc() {
   ipcMain.handle('audio:history', (_, sessionId: string) => db.getTranscripts(sessionId));
   ipcMain.handle('audio:open-permissions',(_,source:string)=>{
     if(process.platform==='darwin')return electron.shell.openExternal(source==='microphone'?'x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone':'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture');
+    if(process.platform==='win32')return electron.shell.openExternal(source==='microphone'?'ms-settings:privacy-microphone':'ms-settings:sound');
   });
   // Audio ASR transcription
   ipcMain.handle('api:transcribe-audio', async (_, payload: { audioData: ArrayBuffer | number[]; mimeType?: string }) => {

@@ -10,7 +10,7 @@ import {
   Shield,
   PanelLeft
 } from 'lucide-react';
-import {cx} from './ui';
+import {cx, formatShortcut} from './ui';
 
 export type NavTab = 'copilot' | 'knowledge' | 'history' | 'models' | 'settings';
 
@@ -85,10 +85,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {children}
 
       <div className="px-2.5 py-2.5 border-t border-separator space-y-0.5">
-        <button onClick={onToggleFloating} className={row(false)} title="独立悬浮窗 (Cmd+Shift+Space)">
+        <button onClick={onToggleFloating} className={row(false)} title={`独立悬浮窗 (${formatShortcut('Cmd+Shift+Space', 'Ctrl+Shift+Space')})`}>
           <Layers size={16} strokeWidth={1.75} />
           {!collapsed && <span className="truncate flex-1 text-left">独立悬浮窗</span>}
-          {!collapsed && <span className="text-[11px] text-label-3">⇧⌘Space</span>}
+          {!collapsed && <span className="text-[11px] text-label-3">{formatShortcut('⇧⌘Space', 'Ctrl+Shift+Space')}</span>}
         </button>
         <button onClick={onToggleProtection} className={row(false)} title={contentProtected ? '防窥保护: 已开启' : '防窥保护: 未开启'}>
           {contentProtected ? <ShieldCheck size={16} strokeWidth={1.75} className="text-success" /> : <Shield size={16} strokeWidth={1.75} />}
