@@ -141,10 +141,10 @@ export interface TurnRecord {
   options?: AnswerOptions;
   topic?: string;
   answerPolicyVersion?: number;
-  retrieval?: {documentIds:string[];name:string;reason:string;anchor:string;caseSection?:string;omitted:string[];items:{fileName:string;sectionPath:string;chunkId:string;chars:number}[]};
+  retrieval?: {documentIds:string[];contextDocumentIds?:string[];name:string;reason:string;anchor:string;caseSection?:string;rewrittenQuestion?:string;searchQuery?:string;intent?:string;omitted:string[];items:{fileName:string;sectionPath:string;chunkId:string;chars:number}[]};
   error?: string;
   timings?: {startedAt: number; firstTokenMs?: number; totalMs?: number; queuedMs?: number;
-    retrievalMs?: number; modelRequestedAt?: number; responseMs?: number; streaming?: boolean; attempts?: number;
+    completionMs?: number; retrievalMs?: number; modelRequestedAt?: number; responseMs?: number; streaming?: boolean; attempts?: number;
     speechToSubmitMs?: number; speechToFirstTokenMs?: number};
   citations: CitationSnapshot[];
   hallucinatedNumbers?: number[];
@@ -186,6 +186,6 @@ export interface TranscriptRecord {
 
 export interface MemoryEntry {
   id:string; project:string; topic?:string; kind:'fact'|'working'|'uncertain'; text:string;
-  source:{type:'document'|'user'|'assistant';id:string;quote?:string}; confirmed:boolean; updatedAt:number;
+  source:{type:'document'|'user'|'assistant';id:string;quote?:string;documentIds?:string[]}; confirmed:boolean; updatedAt:number;
 }
-export interface SessionMemory {sessionId:string;revision:number;currentProject:string;entries:MemoryEntry[];updatedAt:number;}
+export interface SessionMemory {sessionId:string;revision:number;currentProject:string;projectSetByUser?:boolean;entries:MemoryEntry[];updatedAt:number;}

@@ -135,7 +135,11 @@ export const ModelConfigView: React.FC = () => {
   const handleFieldChange = (role: ConfigRole, field: keyof RoleState, value: any) => {
     setRoleStates(prev => ({
       ...prev,
-      [role]: { ...prev[role], [field]: value }
+      [role]: {
+        ...prev[role],
+        ...(field === 'baseUrl' && value !== prev[role].baseUrl ? {newKey:'', testStatus:{testing:false}} : {}),
+        [field]: value
+      }
     }));
   };
 
@@ -146,6 +150,7 @@ export const ModelConfigView: React.FC = () => {
         ...prev[role],
         baseUrl: preset.baseUrl,
         model: preset.model,
+        newKey: preset.baseUrl === prev[role].baseUrl ? prev[role].newKey : '',
         testStatus: { testing: false }
       }
     }));
@@ -155,14 +160,14 @@ export const ModelConfigView: React.FC = () => {
     const s = roleStates[role];
     handleFieldChange(role, 'saving', true);
     try {
-      await (window as any).api.saveRoleConfig({
+      const configs: Record<ProviderRole, RoleModelConfig> = await (window as any).api.saveRoleConfig({
         role,
         baseUrl: s.baseUrl,
         model: s.model,
         key: s.newKey.trim() || undefined,
         timeoutMs: s.timeoutMs
       });
-      handleFieldChange(role, 'hasKey', s.newKey.trim() ? true : s.hasKey);
+      handleFieldChange(role, 'hasKey', configs[role].hasKey);
       handleFieldChange(role, 'newKey', '');
       handleFieldChange(role, 'saving', false);
       setSyncToast(`${ROLE_METADATA[role].title} 配置已保存成功！`);
@@ -345,7 +350,7 @@ export const ModelConfigView: React.FC = () => {
                     <input type="text" value={state.baseUrl} onChange={e => handleFieldChange(role, 'baseUrl', e.target.value)}
                       placeholder={role === 'embed' ? 'https://api.siliconflow.cn/v1' : 'https://api.deepseek.com/v1'} className={inputRowField} />
                   </Row>
-                  <Row label="API 密钥（本地加密保存）" detail={state.hasKey ? '留空保持现有密钥' : '需要配置'}>
+                  <Row label="API 密钥（本地加密保存）" detail={state.hasKey ? '更换服务域名后请重新填写' : '需要配置'}>
                     <div className="relative w-full max-w-[360px]">
                       <KeyRound size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-label-3 pointer-events-none" />
                       <input type={state.showKey ? 'text' : 'password'} value={state.newKey} onChange={e => handleFieldChange(role, 'newKey', e.target.value)}

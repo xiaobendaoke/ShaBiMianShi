@@ -21,8 +21,13 @@ export class RetrievalService {
 
   public projects(libraryIds?:string[]) {
     const chunks=this.keywordIndex.scopedChunks(libraryIds);
-    return [...new Set(chunks.map(c=>c.documentId))].map(id=>({id,fileName:this.docLookup.getDocument(id)?.fileName||id,
-      headings:[...new Set(chunks.filter(c=>c.documentId===id).map(c=>c.sectionPath.split(' > ')[0]))].slice(0,6)}));
+    return [...new Set(chunks.map(c=>c.documentId))].map(id=>{
+      const doc=this.docLookup.getDocument(id);
+      const docChunks=chunks.filter(c=>c.documentId===id).sort((a,b)=>a.ordinal-b.ordinal);
+      const firstRoot=docChunks[0]?.sectionPath?.split(' > ')[0]?.trim()||'';
+      const isDocTitle=!!firstRoot&&!/^(?:正文|全文|目录|第\s*\d+\s*页|[一二三四五六七八九十\d]+[、.．\s]|第[一二三四五六七八九十\d]+[章节部分])/.test(firstRoot);
+      return {id,fileName:doc?.fileName||id,headings:isDocTitle?[firstRoot]:[]};
+    });
   }
 
   public async retrieve(
@@ -50,7 +55,10 @@ export class RetrievalService {
 
     if (queryVector && this.vectorIndex.size > 0) {
       try {
-        vecResults = this.vectorIndex.search(queryVector, libraryIds, topKCandidates);
+        const allowedChunkIds = req.documentIds?.length
+          ? new Set(this.keywordIndex.scopedChunks(libraryIds).filter(c => req.documentIds!.includes(c.documentId)).map(c => c.id))
+          : undefined;
+        vecResults = this.vectorIndex.search(queryVector, libraryIds, topKCandidates, allowedChunkIds);
       } catch (err) {
         console.warn('Vector search warning:', err);
       }
@@ -71,26 +79,42 @@ export class RetrievalService {
       vecScoreMap.set(r.chunkId, r.score);
     });
 
-    // 3. Reciprocal Rank Fusion (RRF) with constant k=60
+    // 3. Reciprocal Rank Fusion (RRF) with constant k=60 + .md primary authority weighting
     const k = 60;
     const allChunkIds = new Set<string>([...kwRankMap.keys(), ...vecRankMap.keys()]);
     const fusedItems: RetrievalResultItem[] = [];
+    const resumeIntent = /自我介绍|个人介绍|教育|学校|大学|本科|硕士|学院|专业|论文|期刊|实习|兵装|深蓝|procise|bootloader|jetson|stm32|knn[\s_\-]?ddpg/i.test(req.query);
+    const hasMdKeywordHit = [...kwRankMap.keys()].some(cid => {
+      const ch = this.keywordIndex.getChunk(cid);
+      const d = ch ? this.docLookup.getDocument(ch.documentId) : null;
+      return d?.fileType === 'md' || /\.md$/i.test(d?.fileName || '');
+    });
 
     for (const chunkId of allChunkIds) {
       const chunk = this.keywordIndex.getChunk(chunkId);
       if (!chunk || !this.keywordIndex.inScope(chunkId,libraryIds) || (req.documentIds?.length&&!req.documentIds.includes(chunk.documentId))) continue;
 
-      const doc = this.docLookup.getDocument(chunk.documentId);
-      const fileName = doc?.fileName || '未知文档';
-
       const kwRank = kwRankMap.get(chunkId);
       const vecRank = vecRankMap.get(chunkId);
+      const vecScore = vecScoreMap.get(chunkId) || 0;
+
+      // Open-scope vector noise guard: prevent low-similarity vector hits from injecting unrelated project chunks
+      if (!req.documentIds?.length && !kwRank) {
+        const minVec = kwResults.length === 0 ? 0.46 : 0.35;
+        if (vecScore < minVec) continue;
+      }
+
+      const doc = this.docLookup.getDocument(chunk.documentId);
+      const fileName = doc?.fileName || '未知文档';
+      const isMd = doc?.fileType === 'md' || /\.md$/i.test(fileName);
+      const isPdf = doc?.fileType === 'pdf' || /\.pdf$/i.test(fileName);
 
       const rrfKw = kwRank ? 1.0 / (k + kwRank) : 0;
       const rrfVec = vecRank ? 1.0 / (k + vecRank) : 0;
       const section=caseSection(chunk.sectionPath);
       const caseIntent=/坑|卡在哪|定位|排查|故障|异常|量化|校准|怎么确认|效果|结果|最后/.test(req.query);
-      const rrfScore = rrfKw + rrfVec + (section&&caseIntent?0.04:0) + (req.focusSection&&section===req.focusSection?0.1:0);
+      const mdAuthorityBoost = !resumeIntent ? (isMd ? 0.006 : (isPdf && hasMdKeywordHit ? -0.003 : 0)) : 0;
+      const rrfScore = rrfKw + rrfVec + mdAuthorityBoost + (section&&caseIntent?0.04:0) + (req.focusSection&&section===req.focusSection?0.1:0);
 
       fusedItems.push({
         chunkId,

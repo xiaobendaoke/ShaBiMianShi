@@ -86,9 +86,13 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
   };
 
   const handleDeleteDoc = async (id: string) => {
-    if (confirm('确认从知识库中删除此文档？')) {
-      await (window as any).api.deleteDocument(id);
-      loadDocuments();
+    if (confirm('确认从所有知识库删除此文档及应用保存的文件副本？')) {
+      try {
+        await (window as any).api.deleteDocument(id);
+        loadDocuments();
+      } catch (err: any) {
+        alert(`删除失败：${err.message}`);
+      }
     }
   };
 

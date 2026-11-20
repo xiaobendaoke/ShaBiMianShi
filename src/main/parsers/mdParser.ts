@@ -45,8 +45,11 @@ export function parseMarkdown(contentOrBuffer: string | Buffer): ParsedDocument 
       const headerMatch = trimmed.match(/^(#{1,6})\s+(.+)$/);
       if (headerMatch) {
         flushSection();
-        const level = headerMatch[1].length;
-        const title = headerMatch[2].trim();
+        const rawLevel = headerMatch[1].length;
+        const title = headerMatch[2].trim().replace(/[\u2e80-\u2fdf\uf900-\ufaff\uff10-\uff19\uff21-\uff3a\uff41-\uff5a]/g, ch => ch.normalize('NFKC'));
+        const isNumberedTop = rawLevel === 1 && /^(?:[一二三四五六七八九十\d]+[、.．\s]|第[一二三四五六七八九十\d]+[章节部分]|目录$)/.test(title);
+        // Anchor the document's root H1 title at level 0 so subsequent `# 一、...` chapters preserve project context
+        const level = rawLevel === 1 && headingStack.length === 0 && !isNumberedTop ? 0 : rawLevel;
 
         // Pop stack until parent level
         while (headingStack.length > 0 && headingStack[headingStack.length - 1].level >= level) {

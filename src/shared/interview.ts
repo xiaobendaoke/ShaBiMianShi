@@ -2,7 +2,7 @@ import type { AnswerOptions, AnsweringStrategy, PromptStyle } from '../main/type
 
 export function answerPolicy(question: string, style: PromptStyle, options: AnswerOptions = {}) {
   const coding = !!options.images?.length || options.action === 'debug' || style === 'algorithm' || /手撕|算法题|(?:实现|编写|写一个).*(?:代码|函数|算法|程序|排序|查找|链表|二叉树)/.test(question);
-  const project = /项目|你们|你负责|你的|简历|经历|当时|刚才|为什么这样|这个方案/.test(question);
+  const project = /项目|你们|你负责|你的|你做|自我介绍|个人介绍|简历|经历|实习|课题|研究方向|论文|当时|刚才|为什么这样|这个方案|8295|3588|mappo|yolo/i.test(question);
   const detailed = style === 'detailed' || options.action === 'explain' || /详细解释|详细展开/.test(question);
   const design = style === 'system_design' || /设计一个|系统设计|架构设计/.test(question);
   const compare = /区别|对比|原理|为什么|如何|怎么/.test(question);
@@ -46,12 +46,43 @@ export function mergeTranscript(previous: string, next: string): string {
   }
   return a + (/[。！？!?，,；;]$/.test(a) ? '' : '，') + b;
 }
+export function isAsrHallucination(text: string): boolean {
+  const norm = text.normalize('NFKC').trim();
+  if (!norm) return true;
+  const hasCjk = /[\u4e00-\u9fff]/.test(norm);
+  const hasForeignNoise = /[\u0900-\u097f\u0600-\u06ff\u0e00-\u0e7f\u0400-\u04ff\uac00-\ud7af\u3040-\u30ff]/.test(norm);
+  if (hasForeignNoise && !hasCjk) return true;
+  return false;
+}
 export function isFiller(text: string) {
-  const clean = text.toLowerCase().replace(/[\s\p{P}\p{S}]/gu, '');
-  return !clean || /^(嗯+|呃+|啊+|哦+|噢+|唔+|好的|好|对|是的|谢谢|继续|没问题|oh|yeah|ok|okay|uh|um|hmm)+$/.test(clean);
+  if (isAsrHallucination(text)) return true;
+  const clean = text.normalize('NFKC').toLowerCase().replace(/[\s\p{P}\p{S}]/gu, '');
+  return !clean || /^(嗯+|呃+|啊+|哦+|噢+|唔+|好的|好|好吧|好嘞|对|对的|对吧|是的|是|行|可以|明白|了解|知道了|收到|谢谢|继续|没问题|差不多|oh|yeah|ok|okay|uh|um|hmm|yes|yep|right)+$/.test(clean);
+}
+export function isDanglingOpener(text: string): boolean {
+  const clean = text.normalize('NFKC').replace(/[\s\p{P}\p{S}]/gu, '');
+  if (!clean || clean.length >= 8) return false;
+  return /^(?:嗯|好|行|那|然后|还有|另外|那么|所以|就|就是)*(?:我想问(?:一下)?|问一下|请问(?:一下)?|就比如说(?:就)?|比如说|那你(?:们)?|你们(?:这个|那个)?|你刚才(?:说)?|还有一个(?:就是)?|再问一个|我想想(?:怎么说)?)$/.test(clean);
+}
+export function shouldMergeContinuation(previous: string, next: string, speechGapMs: number): boolean {
+  const a = previous.normalize('NFKC').trim();
+  const b = next.normalize('NFKC').trim();
+  if (!a || !b || speechGapMs > 4800 || /[。！？.!?]["”’」』）)]*$/.test(a)) return false;
+  if (/^(?:(?:好(?:的)?|行|明白|了解|知道了|可以|没问题|ok|okay)[\s，,。！!]*)?(?:那)?(?:下一个|下一题|换个问题|另外问一下|我们看下一题|再问一个别的|什么是|请解释|解释一下|介绍一下|讲一下)/i.test(b)) {
+    return false;
+  }
+  const cleanA = a.replace(/[\s\p{P}\p{S}]/gu, '');
+  const hasInterrogativeA = /什么|怎么|如何|为什么|为啥|多少|几|哪|吗|呢|区别|对比|原理|介绍|讲(?:一下|讲)|说(?:一下|说)|谈(?:一下|谈)|是不是|能不能|有没有/.test(cleanA) ||
+    /^(?:what|why|how|when|where|which|who|can|could|is|are|explain|describe)\b/i.test(a);
+  const danglingA = isDanglingOpener(a) ||
+    /(?:的|地|得|和|与|或|以及|还有|比如|例如|就是|如果|假如|当|在|对|对于|关于|把|被|让|给)[，,、…\s]*$/.test(a);
+  const unfinishedTopic = !hasInterrogativeA &&
+    /(?:里|里面|中|上|下|时候|方面|这块|那块|部分|项目|系统|方案|模块|模型|平台|框架|链路|场景|过程)[，,、…\s]*$/.test(a);
+  const continuationB = /^[\s，,、]*(?:是怎么|是如何|为什么|为啥|怎么|如何|有多少|是多少|大概多少|能达到多少|用的什么|用了什么|具体|主要|呢|吗|吧|呀|还是|或者|以及|而且|并且|同时|包括|它的|他的|这里的|里面的|上面|刚才|那块|这块|方面|的时候|之后|以后|如果|要是|那它|那这个)/.test(b);
+  return danglingA || (unfinishedTopic && (speechGapMs <= 1800 || continuationB));
 }
 export function isQuestion(text: string) {
-  return text.replace(/[\s\p{P}\p{S}]/gu, '').length >= 3 && !isFiller(text);
+  return text.normalize('NFKC').replace(/[\s\p{P}\p{S}]/gu, '').length >= 3 && !isFiller(text);
 }
 
 export function speechViolation(text:string) {return /【(?:资料事实|通用补充|最大难点|参考资料)】|\[(?:资料)?\d+\]|^\s*(?:#{1,4}\s|【[^】\n]+】|\*\*[^\n]{1,80}\*\*\s*$)/m.test(text);}

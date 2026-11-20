@@ -1,5 +1,6 @@
 import {resolveProjectFocus,caseSection,answeredCase} from './services/projectFocus';
-import {memoryContext,recentContext,verifiedMemoryPatch,isUserCorrection,selectedProject,type MemorySource} from './services/sessionMemory';
+import {memoryContext,recentContext,verifiedMemoryPatch,isUserCorrection,selectedProject,turnContextDocuments,type MemorySource} from './services/sessionMemory';
+import {preCorrectAsrText,shouldRunLlmCompletion} from './services/queryCompletion';
 import { BUILD_ID, IPC_VERSION, SCHEMA_VERSION } from '../shared/runtime';
 import { backupUserData } from './services/dataBackup';
 import electron from 'electron';
@@ -13,14 +14,13 @@ import { VectorIndex } from './indexing/vectorIndex';
 import { embeddingSpaceKey } from './indexing/embeddingSpace';
 import { restoreEmbeddingIndex, ensureEmbeddingIndex, indexMatchesProvider } from './indexing/embeddingLifecycle';
 import { RetrievalService } from './indexing/retrievalService';
-import { ProviderService } from './services/providerService';
+import { ProviderService, providerOrigin, sameProviderOrigin } from './services/providerService';
 import { IngestionQueue } from './services/ingestionQueue';
 import { MockAiServer } from './services/mockServer';
 import { WindowManager } from './windows/windowManager';
 import { AudioSessionService } from './services/audioSession';
 import {NativeSystemAudio} from './services/nativeSystemAudio';
 import { CaptureCoordinator } from './services/captureCoordinator';
-import { answerPolicy } from '../shared/interview';
 import type { AnswerOptions, AudioSource } from './types';
 import { captureScreen } from './services/screenCapture';
 import { PRESET_INTERVIEW_BANK_CONTENT } from './resources/presetInterviewBank';
@@ -89,8 +89,9 @@ function drainQuestions() {
     }
   }
 }
-function submitQuestion(sessionId: string, question: string, libraryIds?: string[], turnId: string = crypto.randomUUID(), options: AnswerOptions = {}) {
+function submitQuestion(sessionId: string, rawQuestion: string, libraryIds?: string[], turnId: string = crypto.randomUUID(), options: AnswerOptions = {}) {
   if (!db.getSessions().some(s => s.id === sessionId)) throw new Error('会话不存在');
+  const question = options.audioTiming ? preCorrectAsrText(rawQuestion) : rawQuestion;
   if (!question?.trim()) throw new Error('问题不能为空');
   if (activeTurns.has(turnId) || pendingQuestions.some(q => q.turnId === turnId) || db.getTurns(sessionId).some(t => t.id === turnId)) throw new Error('问题ID已在使用');
   if (pendingQuestions.filter(q => q.sessionId === sessionId).length >= 20) throw new Error('待答问题过多，请先处理队列');
@@ -102,8 +103,35 @@ function submitQuestion(sessionId: string, question: string, libraryIds?: string
   drainQuestions(); return turnId;
 }
 
+function supersedeQuestion(sessionId: string, fragment: string, continuation: {turnId: string; mergedQuestion: string}, options: AnswerOptions): string {
+  const { turnId, mergedQuestion } = continuation;
+  const existing = db.getTurns(sessionId).find(t => t.id === turnId);
+  if (!existing || existing.status === 'cancelled' || existing.status === 'error') {
+    return submitQuestion(sessionId, fragment, undefined, undefined, options);
+  }
+  const question = preCorrectAsrText(mergedQuestion);
+  const queued = pendingQuestions.find(q => q.turnId === turnId && q.sessionId === sessionId);
+  if (queued) {
+    queued.question = question;
+    queued.options = options;
+    db.saveTurn({...existing, question, answer: '', status: 'queued', error: undefined, options});
+    windowManager.broadcast('chat:queued', {sessionId, turnId});
+    drainQuestions();
+    return turnId;
+  }
+  const active = activeTurns.get(turnId);
+  if (active && active.sessionId === sessionId) {
+    active.supersede();
+  }
+  db.saveTurn({...existing, question, answer: '', status: 'queued', citations: [], error: undefined, hallucinatedNumbers: undefined, citationWarning: undefined, options});
+  pendingQuestions.unshift({sessionId, question, turnId, options});
+  windowManager.broadcast('chat:queued', {sessionId, turnId});
+  drainQuestions();
+  return turnId;
+}
+
 // Per-turn AbortController map to eliminate global state race conditions (P1-06)
-const activeTurns = new Map<string, { controller: AbortController; sessionId: string; turn: TurnRecord; cancel: () => void }>();
+const activeTurns = new Map<string, { controller: AbortController; sessionId: string; turn: TurnRecord; cancel: () => void; supersede: () => void }>();
 
 const DEFAULT_ROLE_DEFAULTS: Record<ProviderRole, { name: string; baseUrl: string; model: string }> = {
   chat: {
@@ -202,24 +230,24 @@ function saveRoleConfig(
     }
   }
 
-  let targetProfileId = currentProfile ? currentProfile.id : dedicatedId;
-
-  if (isSharedWithOthers || !currentProfile) {
-    targetProfileId = dedicatedId;
-    const prevKey = currentProfile ? keyVault.getKey(currentProfile.id) : undefined;
-    if (prevKey && !keyVault.hasKey(dedicatedId) && !key) {
-      keyVault.setKey(dedicatedId, prevKey);
-    }
-    db.setActiveProviderId(role, targetProfileId);
-  }
-
+  const targetProfileId = isSharedWithOthers ? dedicatedId : currentProfile?.id ?? dedicatedId;
   const existing = db.getProfiles().find(p => p.id === targetProfileId);
+  const endpoint = baseUrl.trim();
+  if (!providerOrigin(endpoint)) throw new Error('请填写有效的 HTTP 或 HTTPS 服务地址');
+  const changesOrigin = existing && !sameProviderOrigin(existing.baseUrl, endpoint);
+  const sameCurrentOrigin = currentProfile && sameProviderOrigin(currentProfile.baseUrl, endpoint);
+  if (currentProfile && !sameCurrentOrigin && keyVault.hasKey(currentProfile.id) && !key?.trim()) {
+    throw new Error('服务地址已变更，请输入新服务的 API Key 后再保存');
+  }
+  const savedKey = !changesOrigin && keyVault.hasKey(targetProfileId);
+  const newKey = key?.trim() || (!savedKey && sameCurrentOrigin && currentProfile.id !== targetProfileId
+    ? keyVault.getKey(currentProfile.id) : null);
   const updatedProfile: ProviderProfile = {
     id: targetProfileId,
     name: name || existing?.name || DEFAULT_ROLE_DEFAULTS[role].name,
     protocol: 'openai',
-    baseUrl: baseUrl.trim(),
-    hasKey: (key && key.trim().length > 0) ? true : (existing ? keyVault.hasKey(existing.id) : false),
+    baseUrl: endpoint,
+    hasKey: !!newKey || savedKey,
     modelChat: role === 'chat' ? model.trim() : (existing?.modelChat || 'gpt-4o'),
     modelEmbed: role === 'embed' ? model.trim() : (existing?.modelEmbed || 'BAAI/bge-m3'),
     modelVision: role === 'vision' ? model.trim() : (existing?.modelVision || 'gpt-4o'),
@@ -229,12 +257,11 @@ function saveRoleConfig(
     createdAt: existing?.createdAt || Date.now()
   };
 
+  // Clear the old credential before changing its endpoint. Store the new one only after the endpoint is saved.
+  if (changesOrigin) keyVault.deleteKey(targetProfileId);
   db.saveProfile(updatedProfile);
+  if (newKey) keyVault.setKey(targetProfileId, newKey);
   db.setActiveProviderId(role, targetProfileId);
-
-  if (key && key.trim().length > 0) {
-    keyVault.setKey(targetProfileId, key.trim());
-  }
 
   if (role === 'embed') {
     restoreEmbeddingIndex(db, vectorIndex, db.getActiveProfile('embed'));
@@ -295,8 +322,17 @@ async function bootstrap() {
     if(channel==='audio:state'&&!value.running&&nativeCapture?.id===value.captureId){nativeSystemAudio.stop();nativeCapture=undefined;}
     windowManager.broadcast(channel, value);
   }, record => db.saveTranscript(record),
-  (sessionId, question, audioTiming) => { try { submitQuestion(sessionId, question, undefined, undefined, {audioTiming}); } catch(error: any) {windowManager.broadcast('audio:error', {sessionId, error: error.message});} }, () => captureCoordinator.busy);
-  providerService = new ProviderService(keyVault);
+  (sessionId, question, audioTiming, continuation) => {
+    try {
+      return continuation
+        ? supersedeQuestion(sessionId, question, continuation, {audioTiming})
+        : submitQuestion(sessionId, question, undefined, undefined, {audioTiming});
+    } catch(error: any) {
+      windowManager.broadcast('audio:error', {sessionId, error: error.message});
+      return undefined;
+    }
+  }, () => captureCoordinator.busy);
+  providerService = new ProviderService(keyVault, profileId => db.getProfiles().find(p => p.id === profileId)?.baseUrl);
 
   ingestionQueue = new IngestionQueue(db, keywordIndex, vectorIndex, storageDir, providerService);
 
@@ -312,7 +348,7 @@ async function bootstrap() {
   for (const chunk of allChunks) {
     const libs = chunkDocMap.get(chunk.documentId) || [];
     if (libs.length > 0) {
-      keywordIndex.addChunk(chunk, libs);
+      keywordIndex.addChunk(chunk, libs, db.getDocument(chunk.documentId)?.fileName);
     }
   }
 
@@ -490,30 +526,139 @@ function executeAskQuestion(
     activeTurns.delete(turnId); setTimeout(drainQuestions, 0);
     windowManager.broadcast('chat:error', { turnId, sessionId, error: error.message, status: turn.status });
   };
-  activeTurns.set(turnId, { controller, sessionId, turn, cancel: () => {
-    controller.abort(); finishError(new Error('用户取消了生成'));
-  } });
+  activeTurns.set(turnId, {
+    controller,
+    sessionId,
+    turn,
+    cancel: () => {
+      audioSession.forgetAutoSubmit(sessionId, turnId);
+      controller.abort(); finishError(new Error('用户取消了生成'));
+    },
+    supersede: () => {
+      if (settled) return;
+      settled = true;
+      controller.abort();
+      activeTurns.delete(turnId);
+      memoryJobs.get(sessionId)?.abort();
+    }
+  });
   db.saveTurn(turn);
   if (!db.getSetting('active_session_id')) db.setSetting('active_session_id', sessionId);
   windowManager.broadcast('chat:start', { turnId, sessionId, question, createdAt: turn.createdAt, turn });
+  windowManager.broadcast('chat:reset', { turnId, sessionId });
   const selectedLibraries=libraryIds??session.libraryIds;
-  const completedBefore=db.getTurns(sessionId).filter(t=>t.id!==turnId&&t.status==='completed');
-  const previous=completedBefore.at(-1);
+  const getScopedDocuments = () => new Set(db.getDocumentLibraryLinks()
+    .filter(link => selectedLibraries.includes(link.libraryId)).map(link => link.documentId));
+  let scopedDocumentIds = getScopedDocuments();
+  const documentInScope = (id: string) => scopedDocumentIds.has(id);
+  const completedInScope = () => db.getTurns(sessionId)
+    .filter(t => t.id !== turnId && t.status === 'completed' && turnContextDocuments(t).every(documentInScope))
+    // Old answers can contain document memory with no recorded provenance.
+    .map(t => t.retrieval?.contextDocumentIds ? t : {...t, answer: ''});
+  const completedBefore = completedInScope();
   const projects=retrievalService.projects(selectedLibraries);
-  const previousFocus=previous?.retrieval|| (previous?resolveProjectFocus(previous.question,projects):undefined);
-  const focus=resolveProjectFocus(question,projects,previousFocus);
-  const continuing=focus.reason==='连续追问继承上一题项目';
-  const needsRetrieval = session.strategy === 'docs_only' || answerPolicy(question, session.promptStyle, options).project || focus.documentIds.length>0;
-  const targetLibraries = needsRetrieval ? selectedLibraries : [];
-  // ACK the identity before running cancellable retrieval/generation.
+  let previousFocusTurn: TurnRecord | undefined;
+  let previousFocus: ReturnType<typeof resolveProjectFocus> | undefined;
+  for (let i = completedBefore.length - 1; i >= Math.max(0, completedBefore.length - 4); i--) {
+    const candidate = completedBefore[i];
+    const candidateFocus = candidate.retrieval?.documentIds?.length
+      ? candidate.retrieval
+      : resolveProjectFocus(candidate.question, projects);
+    if (candidateFocus.documentIds.length > 0) {
+      previousFocusTurn = candidate;
+      previousFocus = candidateFocus;
+      break;
+    }
+  }
+  let focus = resolveProjectFocus(question, projects, previousFocus);
+  // ACK the identity before running cancellable completion/retrieval/generation.
   void (async () => {
     try {
+      let effectiveQuestion = question;
+      let searchQuery = focus.reason === '连续追问继承上一题项目'
+        ? `${focus.anchor}\n本次追问：${question}`
+        : question;
+      let intent: 'project_or_resume' | 'general_tech' | 'chatter' = 'project_or_resume';
+      const completionDocuments = new Set<string>();
+
+      if (shouldRunLlmCompletion({
+        question,
+        options,
+        hasLibraries: selectedLibraries.length > 0,
+        historyCount: completedBefore.length,
+        focusReason: focus.reason
+      }) && keyVault.hasKey(chatProfile.id)) {
+        const compStart = Date.now();
+        try {
+          const docCatalog = projects.map(p => {
+            const docRec = db.getDocument(p.id);
+            const kind: 'md' | 'pdf' | 'other' = docRec?.fileType === 'md' || /\.md$/i.test(p.fileName)
+              ? 'md'
+              : docRec?.fileType === 'pdf' || /\.pdf$/i.test(p.fileName)
+                ? 'pdf'
+                : 'other';
+            return { id: p.id, fileName: p.fileName, kind, title: p.headings?.[0] };
+          });
+          const comp = await providerService.completeQuery(chatProfile, {
+            question,
+            fromAudio: !!options.audioTiming,
+            activeProject: previousFocus?.name && !previousFocus.name.includes(' / ') ? previousFocus.name : undefined,
+            documents: docCatalog,
+            recentTurns: completedBefore.slice(-4).map(t => ({
+              question: t.question,
+              answerSummary: t.answer.slice(0, 220),
+              project: t.retrieval?.name && !t.retrieval.name.includes(' / ') ? t.retrieval.name : undefined
+            }))
+          }, controller.signal);
+          turn.timings!.completionMs = Date.now() - compStart;
+          intent = comp.intent;
+          for (const prior of completedBefore.slice(-4)) {
+            for (const documentId of turnContextDocuments(prior)) completionDocuments.add(documentId);
+          }
+          if (options.audioTiming) {
+            effectiveQuestion = comp.rewrittenQuestion || question;
+            if (effectiveQuestion !== question) for (const doc of docCatalog) completionDocuments.add(doc.id);
+          }
+          searchQuery = options.audioTiming ? comp.searchQuery || effectiveQuestion : `${question}\n${comp.searchQuery}`;
+          if (intent === 'general_tech' || intent === 'chatter') {
+            if (focus.reason !== '本题项目标识匹配') {
+              focus = { documentIds: [], name: '', reason: intent === 'chatter' ? '日常寒暄试音，跳过检索' : '通用技术概念题，开放核对', anchor: effectiveQuestion };
+            }
+          } else if (comp.targetDocIds.length > 0 && focus.reason !== '本题项目标识匹配') {
+            const targetDocs = projects.filter(p => comp.targetDocIds.includes(p.id));
+            if (targetDocs.length > 0) {
+              const mdOnly = targetDocs.filter(d => /\.md$/i.test(d.fileName));
+              const chosen = mdOnly.length > 0 ? mdOnly : targetDocs;
+              focus = {
+                documentIds: chosen.map(d => d.id),
+                name: chosen.map(d => d.fileName.replace(/\.[^.]+$/, '')).join(' / '),
+                reason: '上下文补全定位目标文档',
+                anchor: effectiveQuestion
+              };
+            }
+          } else if (!focus.documentIds.length) {
+            const refocused = resolveProjectFocus(effectiveQuestion, projects, previousFocus);
+            if (refocused.documentIds.length > 0) focus = refocused;
+          }
+        } catch (err) {
+          if (controller.signal.aborted) throw err;
+          turn.timings!.completionMs = Date.now() - compStart;
+        }
+      }
+      if (controller.signal.aborted || settled) return;
+
+      const continuing = focus.reason === '连续追问继承上一题项目' || focus.reason === '上下文补全定位目标文档';
+      const shouldRetrieve = selectedLibraries.length > 0 && !options.images?.length && intent !== 'chatter';
+      const targetLibraries = shouldRetrieve ? selectedLibraries : [];
+
       ensureEmbeddingIndex(db, vectorIndex, embedProfile);
       let qVec: number[] | undefined;
       if (embedProfile && targetLibraries.length && vectorIndex.size &&
         indexMatchesProvider(vectorIndex, embedProfile) && keyVault.hasKey(embedProfile.id)) {
         try {
-          const vectors = await providerService.generateEmbeddings(embedProfile, [question], undefined, controller.signal);
+          const retrievalDeadline = AbortSignal.timeout(Math.min(embedProfile.timeoutMs || 30000, 3000));
+          const vectors = await providerService.generateEmbeddings(embedProfile, [searchQuery], undefined,
+            AbortSignal.any([controller.signal, retrievalDeadline]));
           const current = db.getActiveProfile('embed');
           if (current && embeddingSpaceKey(current) === embeddingSpaceKey(embedProfile) &&
             indexMatchesProvider(vectorIndex, embedProfile) && vectors[0]?.length === vectorIndex.getProfile()?.dimensions) {
@@ -525,9 +670,9 @@ function executeAskQuestion(
         }
       }
       if (controller.signal.aborted || settled) return;
-      const retrieval = await retrievalService.retrieve({query:continuing?focus.anchor+'\n本次追问：'+question:question,libraryIds:targetLibraries,topK:8,documentIds:focus.documentIds,
-        focusSection:continuing&&!/换个|另一个|其他/.test(question)?previous?.retrieval?.caseSection:undefined},qVec);
-      turn.retrieval={...focus,caseSection:retrieval.items.map(i=>caseSection(i.sectionPath)).find(Boolean),omitted:retrieval.omitted||[],items:retrieval.items.map(i=>({chunkId:i.chunkId,fileName:i.fileName,sectionPath:i.sectionPath,chars:i.text.length}))};
+      const retrieval = await retrievalService.retrieve({query:searchQuery,libraryIds:targetLibraries,topK:8,documentIds:focus.documentIds,
+        focusSection:continuing&&!/换个|另一个|其他/.test(effectiveQuestion)?previousFocusTurn?.retrieval?.caseSection:undefined},qVec);
+      turn.retrieval={...focus,rewrittenQuestion:effectiveQuestion!==question?effectiveQuestion:undefined,searchQuery,intent,caseSection:retrieval.items.map(i=>caseSection(i.sectionPath)).find(Boolean),omitted:retrieval.omitted||[],items:retrieval.items.map(i=>({chunkId:i.chunkId,fileName:i.fileName,sectionPath:i.sectionPath,chars:i.text.length}))};
       if (controller.signal.aborted || settled) return;
       const candidates: CitationSnapshot[] = retrieval.items.map((item, idx) => ({
         id: `cite_${turnId}_${idx + 1}`, citationIndex: idx + 1, chunkId: item.chunkId,
@@ -537,25 +682,61 @@ function executeAskQuestion(
       }));
       turn.citations = candidates;
       db.saveTurn(turn);
-      const completed = db.getTurns(sessionId).filter(t => t.id !== turnId && t.status === 'completed');
+      scopedDocumentIds = getScopedDocuments();
+      const completed = completedInScope();
       memoryJobs.get(sessionId)?.abort();
       let memory=db.getMemory(sessionId);
       // Deleted or reimported chunks cannot remain a source of project facts.
       memory={...memory,entries:memory.entries.filter(e=>e.source.type!=='document'||!!db.getChunk(e.source.id))};
-      const project=focus.name||selectedProject(memory,question);
-      if(project!==memory.currentProject)memory=db.updateMemory({...memory,currentProject:project},memory.revision);
+      const scopedEntries = memory.entries.filter(entry => {
+        const source = entry.source;
+        if (source.type === 'document') return keywordIndex.inScope(source.id, selectedLibraries);
+        if (source.type === 'assistant') return source.documentIds?.every(documentInScope) ?? false;
+        return true;
+      });
+      const projectInScope = memory.projectSetByUser || scopedEntries.some(entry => entry.project === memory.currentProject) ||
+        projects.some(doc => documentInScope(doc.id) && doc.fileName.replace(/\.[^.]+$/, '') === memory.currentProject);
+      const scopedMemory = {...memory, entries: scopedEntries, currentProject: projectInScope ? memory.currentProject : ''};
+      const singleFocusName = focus.documentIds.length === 1 ? focus.name : '';
+      const project = singleFocusName || (intent === 'general_tech' ? '' : selectedProject(scopedMemory, effectiveQuestion));
+      if ((project || intent === 'general_tech') && project !== memory.currentProject && !project.includes(' / ')) {
+        memory = db.updateMemory({...memory, currentProject: project, projectSetByUser: false}, memory.revision);
+      }
+      scopedMemory.currentProject = project;
       if(isUserCorrection(question)) {
-        const entry={id:crypto.randomUUID(),project:memory.currentProject||'未归类',kind:'fact' as const,text:question,source:{type:'user' as const,id:turnId,quote:question},confirmed:true,updatedAt:Date.now()};
+        const entry={id:crypto.randomUUID(),project:project||'未归类',kind:'fact' as const,text:question,source:{type:'user' as const,id:turnId,quote:question},confirmed:true,updatedAt:Date.now()};
         memory=db.updateMemory({...memory,entries:[...memory.entries,entry]},memory.revision);
+        scopedEntries.push(entry);
         windowManager.broadcast('memory:changed',memory);
       }
       const memoryRevision=memory.revision;
-      const contextTurns=focus.documentIds.length?completed.filter(t=>t.retrieval?.documentIds.some(id=>focus.documentIds.includes(id))||t.citations.some(c=>focus.documentIds.includes(c.documentId))):completed;
-      const history=[{role:'system',content:`检索范围判断：${focus.reason}。若只给了平台名且存在多个不同项目，请先用一句话澄清具体项目；跨项目比较时分别说明，禁止拼成一个人的同一次实施。\n`+memoryContext(memory,question,focus.documentIds)+`\n用户填写的项目事实：${session.projectFacts||'未提供'}\n目标职位：${session.jobDescription||'未提供'}\n近期问答（回答是草稿，不作为个人事实或格式示范）：${JSON.stringify(recentContext(contextTurns,continuing||options.action==='debug'||options.action==='shorten'||options.action==='explain'))}`}];
+      const recentChronological = completed.slice(-3);
+      const scopedTurns = focus.documentIds.length
+        ? completed.filter(t => t.retrieval?.documentIds.some(id => focus.documentIds.includes(id)) || t.citations.some(c => focus.documentIds.includes(c.documentId)))
+        : completed;
+      const mergedTurnMap = new Map<string, TurnRecord>();
+      for (const t of [...scopedTurns.slice(-3), ...recentChronological]) mergedTurnMap.set(t.id, t);
+      const contextTurns = [...mergedTurnMap.values()].sort((a, b) => a.createdAt - b.createdAt).slice(-4);
+      const contextDocumentIds = [...new Set([
+        ...focus.documentIds,
+        ...completionDocuments,
+        ...candidates.map(c => c.documentId),
+        ...contextTurns.flatMap(turnContextDocuments),
+        ...scopedEntries.flatMap(({source}) => {
+          if (source.type === 'document') {
+            const chunk = keywordIndex.getChunk(source.id);
+            return chunk ? [chunk.documentId] : [];
+          }
+          return source.documentIds ?? [];
+        })
+      ])];
+      turn.retrieval!.contextDocumentIds = contextDocumentIds;
+      const rewriteNote = effectiveQuestion !== question ? `\n面试官语音原句：${question}\n上下文补全后语义：${effectiveQuestion}` : '';
+      const history=[{role:'system',content:`检索范围判断：${focus.reason}。若只给了平台名且存在多个不同项目，请先用一句话澄清具体项目；跨项目比较时分别说明，禁止拼成一个人的同一次实施。${rewriteNote}\n`+memoryContext(scopedMemory,effectiveQuestion,focus.documentIds,singleFocusName||undefined)+`\n用户填写的项目事实：${session.projectFacts||'未提供'}\n目标职位：${session.jobDescription||'未提供'}\n近期问答（回答草稿用于保持上下文连贯，具体参数严格以参考资料为准）：${JSON.stringify(recentContext(contextTurns,true))}`}];
       turn.timings!.retrievalMs=Date.now()-turn.timings!.startedAt;
       turn.timings!.modelRequestedAt=Date.now();
       windowManager.broadcast('chat:progress',{turnId,sessionId,timings:turn.timings});
-      await providerService.streamChat(chatProfile, question, retrieval.items.map((item, idx) => ({
+      await providerService.streamChat(chatProfile, effectiveQuestion, retrieval.items.map((item, idx) => ({
         citationIndex: idx + 1, text: item.text, fileName: item.fileName, sectionPath: item.sectionPath
       })), session.strategy, history, {
         onResponse: value=>{Object.assign(turn.timings!,value);windowManager.broadcast('chat:progress',{turnId,sessionId,timings:turn.timings});},
@@ -590,9 +771,9 @@ function executeAskQuestion(
             const sources:MemorySource[]=retrieval.items.map(item=>({id:item.chunkId,type:'document',text:item.text.slice(0,5000)}));
             if(session.projectFacts?.trim())sources.push({id:'user-project-facts',type:'user',text:session.projectFacts});
             if(isUserCorrection(question))sources.push({id:'user-correction',type:'user',text:question});
-            void providerService.extractMemory(chatProfile,{question,answer,sources,currentProject:memory.currentProject},job.signal).then(result=>{
+            void providerService.extractMemory(chatProfile,{question,answer,sources,currentProject:scopedMemory.currentProject},job.signal).then(result=>{
               if(job.signal.aborted||db.getMemory(sessionId).revision!==memoryRevision)return;
-              const next=verifiedMemoryPatch(memory,result,sources.filter(source=>source.type!=='document'||!!db.getChunk(source.id)),question);
+              const next=verifiedMemoryPatch(memory,result,sources.filter(source=>source.type!=='document'||keywordIndex.inScope(source.id, selectedLibraries)),question,contextDocumentIds);
               const updated=db.updateMemory(next,memoryRevision);windowManager.broadcast('memory:changed',updated);
             }).catch(()=>{/* Failed extraction never changes confirmed memory or delays the answer. */}).finally(()=>{if(memoryJobs.get(sessionId)===job)memoryJobs.delete(sessionId);});
           }
@@ -644,9 +825,11 @@ function registerIpc() {
     memoryJobs.get(sessionId)?.abort();const current=db.getMemory(sessionId);
     const entries=current.entries.filter(e=>e.id!==payload.removeId);
     if(payload.text?.trim())entries.push({id:crypto.randomUUID(),project:payload.currentProject||'未归类',kind:'fact',text:payload.text.trim().slice(0,6000),source:{type:'user',id:'manual-correction',quote:payload.text.trim().slice(0,6000)},confirmed:true,updatedAt:Date.now()});
-    const next=db.updateMemory({...current,currentProject:payload.currentProject.trim().slice(0,120),entries},payload.expectedRevision);windowManager.broadcast('memory:changed',next);return next;
+    const currentProject = payload.currentProject.trim().slice(0,120);
+    const projectSetByUser = currentProject !== '' && (!payload.removeId || (current.projectSetByUser && currentProject === current.currentProject));
+    const next=db.updateMemory({...current,currentProject,projectSetByUser,entries},payload.expectedRevision);windowManager.broadcast('memory:changed',next);return next;
   });
-  ipcMain.handle('memory:reset',(_,sessionId:string,expectedRevision:number)=>{memoryJobs.get(sessionId)?.abort();const current=db.getMemory(sessionId);const next=db.updateMemory({...current,currentProject:'',entries:[]},expectedRevision);windowManager.broadcast('memory:changed',next);return next;});
+  ipcMain.handle('memory:reset',(_,sessionId:string,expectedRevision:number)=>{memoryJobs.get(sessionId)?.abort();const current=db.getMemory(sessionId);const next=db.updateMemory({...current,currentProject:'',projectSetByUser:false,entries:[]},expectedRevision);windowManager.broadcast('memory:changed',next);return next;});
   // Compatibility for older renderers; images always use the multimodal chat model.
   ipcMain.handle('interview:get-sharing', () => true);
   ipcMain.handle('interview:set-sharing', () => undefined);
@@ -728,13 +911,7 @@ function registerIpc() {
     });
   });
   ipcMain.handle('kb:delete-document', (_, id: string) => {
-    const chunks = db.getChunksByDocument(id);
-    for (const c of chunks) {
-      keywordIndex.removeChunk(c.id);
-      vectorIndex.removeVector(c.id);
-    }
-    db.deleteEmbeddingsByDocument(id);
-    db.deleteDocument(id);
+    ingestionQueue.deleteDocument(id);
   });
 
   // Full Text & Chunk Expansion (P1-05)
@@ -859,9 +1036,11 @@ function registerIpc() {
 
   // Cancel generation (P1-06)
   ipcMain.handle('chat:cancel', (_, { turnId, sessionId }: { turnId?: string; sessionId?: string } = {}) => {
+    if (turnId) audioSession.forgetAutoSubmit(sessionId, turnId);
     for (let i = pendingQuestions.length - 1; i >= 0; i--) {
       const item = pendingQuestions[i];
       if ((!turnId || item.turnId === turnId) && (!sessionId || item.sessionId === sessionId)) {
+        audioSession.forgetAutoSubmit(item.sessionId, item.turnId);
         pendingQuestions.splice(i, 1);
         const turn = db.getTurns(item.sessionId).find(t => t.id === item.turnId);
         if (turn) {turn.status = 'cancelled'; db.saveTurn(turn); windowManager.broadcast('chat:error', {turnId: item.turnId, sessionId: item.sessionId, error: '用户取消了生成', status: 'cancelled'});}
@@ -901,17 +1080,21 @@ function registerIpc() {
   });
 
   ipcMain.handle('api:save-profile', (_, profile: ProviderProfile) => {
+    if (!providerOrigin(profile.baseUrl)) throw new Error('请填写有效的 HTTP 或 HTTPS 服务地址');
+    const existing = db.getProfiles().find(p => p.id === profile.id);
+    if (existing && !sameProviderOrigin(existing.baseUrl, profile.baseUrl)) keyVault.deleteKey(profile.id);
     db.saveProfile(profile);
     ensureEmbeddingIndex(db, vectorIndex, db.getActiveProfile('embed'));
   });
 
   ipcMain.handle('api:delete-profile', (_, id: string) => {
-    db.deleteProfile(id);
     keyVault.deleteKey(id);
+    db.deleteProfile(id);
     restoreEmbeddingIndex(db, vectorIndex, db.getActiveProfile('embed'));
   });
 
   ipcMain.handle('api:set-key', (_, { profileId, key }: { profileId: string; key: string }) => {
+    if (!db.getProfiles().some(p => p.id === profileId)) throw new Error('请先保存 API 服务地址');
     keyVault.setKey(profileId, key);
   });
 
@@ -942,12 +1125,17 @@ function registerIpc() {
     timeoutMs?: number;
   }) => {
     const { role, baseUrl, model, key, timeoutMs } = payload;
+    if (!providerOrigin(baseUrl)) return { ok: false, message: '请填写有效的 HTTP 或 HTTPS 服务地址', latencyMs: 0 };
     const currentProfile = db.getActiveProfile(role === 'vision' ? 'chat' : role);
-    const existingKey = currentProfile ? (keyVault.getKey(currentProfile.id) || undefined) : undefined;
-    const effectiveKey = (key && key.trim().length > 0) ? key.trim() : existingKey;
+    const sameOrigin = currentProfile && sameProviderOrigin(currentProfile.baseUrl, baseUrl);
+    const newKey = key?.trim();
+    if (currentProfile && !sameOrigin && !newKey) {
+      return { ok: false, message: '服务地址已变更，请输入新服务的 API Key', latencyMs: 0 };
+    }
+    const effectiveKey = newKey || (sameOrigin ? keyVault.getKey(currentProfile.id) : null);
 
     const dummyProfile: ProviderProfile = {
-      id: currentProfile?.id || `test_${role}`,
+      id: sameOrigin ? currentProfile.id : `test_${role}`,
       name: `测试 ${role}`,
       protocol: 'openai',
       baseUrl: baseUrl.trim(),
@@ -961,7 +1149,7 @@ function registerIpc() {
       createdAt: Date.now()
     };
 
-    const res = await providerService.testConnection(dummyProfile, effectiveKey || undefined, role);
+    const res = await providerService.testConnection(dummyProfile, effectiveKey ?? '', role);
     return { ok: res.success, message: res.message, latencyMs: res.latencyMs };
   });
 

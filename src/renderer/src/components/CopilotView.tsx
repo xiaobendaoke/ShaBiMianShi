@@ -136,14 +136,15 @@ export const CopilotView: React.FC<CopilotViewProps> = ({ currentSession, librar
     };
     const unsubStart = (window as any).api.onChatStreamStart?.((payload: any) => {
       if (payload.sessionId !== currentSessionRef.current) return;
+      stoppedTurnsRef.current.delete(payload.turnId);
       activeTurnRef.current = {sessionId: payload.sessionId, turnId: payload.turnId};
       setIsGenerating(true);
       const turn = payload.turn || {id: payload.turnId, sessionId: payload.sessionId, question: payload.question, role: 'assistant', answer: '', status: 'streaming', citations: [], createdAt: payload.createdAt};
       setTurns(rows => [...rows.filter(t => t.id !== turn.id), turn].sort((a, b) => a.createdAt - b.createdAt));
-      setCurrentTurn(previous => navigation.current.shouldDisplay(previous, turn) ? turn : previous);
+      setCurrentTurn(previous => previous?.id === turn.id || navigation.current.shouldDisplay(previous, turn) ? turn : previous);
     });
     const unsubQueued = (window as any).api.onChatQueued?.((payload: any) => {
-      if (payload.sessionId === currentSessionRef.current) void (window as any).api.getTurns(payload.sessionId).then((rows: TurnRecord[]) => {if(currentSessionRef.current === payload.sessionId) setTurns(previous=>rows.map(row=>{const live=previous.find(t=>t.id===row.id);return live?.status==='streaming'&&row.status==='streaming'?live:row;}));});
+      if (payload.sessionId === currentSessionRef.current) void (window as any).api.getTurns(payload.sessionId).then((rows: TurnRecord[]) => {if(currentSessionRef.current === payload.sessionId) setTurns(previous=>rows.map(row=>{const live=previous.find(t=>t.id===row.id);return live?.status==='streaming'&&row.status==='streaming'&&live.question===row.question?live:row;}));});
     });
     const offBusy = (window as any).api.onScreenBusy?.(setIsCapturing);
     const offPreview = (window as any).api.onScreenPreview?.((p: any) => {if(p.sessionId===currentSessionRef.current) setPreview(p.image);});

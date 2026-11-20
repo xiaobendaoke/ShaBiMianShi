@@ -16,7 +16,7 @@ export async function parsePdf(buffer: Buffer): Promise<ParsedDocument> {
     let totalChars = 0;
 
     for (const p of textResult.pages) {
-      const pageText = (p.text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
+      const pageText = String(p.text || '').replace(/[\u2e80-\u2fdf\uf900-\ufaff\uff10-\uff19\uff21-\uff3a\uff41-\uff5a]/g, (ch: string) => ch.normalize('NFKC')).replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
       const pageNum = p.num || 1;
       if (pageText.length > 0) {
         totalChars += pageText.length;

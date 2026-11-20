@@ -48,7 +48,7 @@ async function compileMain() {
           const source = fs.readFileSync(a.path, 'utf8');
           assert.ok(source.includes('  registerIpc();'));
           return { loader: 'ts', contents: source.replace('  registerIpc();',
-            '  globalThis.__productionTest.state={db,keywordIndex,vectorIndex,ingestionQueue};\n  registerIpc();') };
+            '  globalThis.__productionTest.state={db,keywordIndex,vectorIndex,ingestionQueue,audioSession};\n  registerIpc();') };
         });
       }
     }] });
@@ -82,11 +82,21 @@ async function ask(id: string, question: string, libraries: string[] = []) {
 async function main() {
   await compileMain();
   const originalFetch = globalThis.fetch;
+  const asrQueue: string[] = [];
+  const completionInputs: any[] = [];
   globalThis.fetch = (async (url: any, options: any) => {
+    if (String(url).endsWith('/audio/transcriptions')) {
+      return new Response(JSON.stringify({ text: asrQueue.shift() || '默认测试语音' }), { headers: { 'content-type': 'application/json' } });
+    }
     const body = JSON.parse(options.body);
     if(body.messages?.[0]?.content?.includes('整理会话记忆'))return new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({project:'',facts:[],working:[],uncertain:[]})}}]}),{headers:{'content-type':'application/json'}});
+    if(body.messages?.[0]?.content?.includes('语音纠错与上下文指代补全器')){
+      const payload=JSON.parse(body.messages[1].content);
+      completionInputs.push(payload);
+      return new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({intent:'project_or_resume',rewrittenQuestion:payload.currentQuestion.replace('多肽', '多态'),searchQuery:'订单 幂等 唯一业务编号',targetDocIds:payload.documents.filter((d:any)=>d.fileName==='order.md').map((d:any)=>d.id)})},finish_reason:'stop'}]}),{headers:{'content-type':'application/json'}});
+    }
     const embedding = String(url).endsWith('/embeddings');
-    requests.push({ url: String(url), body });
+    requests.push({ url: String(url), body, authorization: options.headers.Authorization });
     const response = () => embedding
       ? new Response(JSON.stringify({ data: body.input.map((_: unknown, i: number) => ({ index: i, embedding: Array.from({ length: dimension }, (_, j) => j === i % dimension ? 1 : 0) })) }))
       : new Response('data: '+JSON.stringify({choices:[{delta:{content:body.messages[0].content.includes('只提取')?'测试答案[资料1]，无效编号[资料999]':'我会先给出核心结论，再按追问补充。'}}]})+'\n\ndata: [DONE]\n\n', {headers:{'content-type':'text/event-stream'}});
@@ -99,6 +109,15 @@ async function main() {
       });
     }
     if (mode === 'invalidEmbed' && embedding) return new Response(JSON.stringify({ data: [] }));
+    if (mode === 'stallEmbedBody' && embedding) {
+      chatSignal = options.signal;
+      return new Response(new ReadableStream({
+        start(stream) {
+          stream.enqueue(new TextEncoder().encode('{"data":'));
+          options.signal.addEventListener('abort', () => stream.error(options.signal.reason), {once:true});
+        }
+      }));
+    }
     return response();
   }) as any;
   try {
@@ -208,6 +227,200 @@ async function main() {
     state.db.saveTranscript({id:'transcript',sessionId:cancelledSession,captureId:'capture',source:'system',sequence:0,status:'completed',text:'字幕往返',createdAt:Date.now()});
     assert.equal(call('audio:history',cancelledSession)[0].text,'字幕往返');
     pass('Actual unified model: one image request, attachment persistence/cleanup and transcript DB roundtrip');
+
+    // E2E: full-coverage RAG without "项目/你的" gate + live audio split-sentence auto-merge supersede in place
+    call('api:set-active-role', { role: 'asr', profileId: profile.id });
+    const mergeSession = makeSession('merge-e2e', '实时语音合并重答测试');
+    mergeSession.libraryIds = ['default_lib'];
+    call('chat:save-session', mergeSession);
+    call('chat:select-session', mergeSession.id);
+    // 1) Question without old 10-word regex still retrieves citations from default_lib
+    await call('chat:ask-question', { sessionId: mergeSession.id, question: '唯一业务编号防重细节', libraryIds: ['default_lib'], turnId: 'rag-open-1' });
+    await waitFor(() => state.db.getTurns(mergeSession.id).some((t: any) => t.id === 'rag-open-1' && t.status === 'completed'), 'open rag completion');
+    assert.ok(state.db.getTurns(mergeSession.id).find((t: any) => t.id === 'rag-open-1').citations.length > 0, 'Questions without 项目/你的 must still retrieve KB citations');
+    // 2) Audio fast auto-submit paused mid-stream, then superseded in-place by trailing half-sentence
+    asrQueue.push('那这个 circle light 方案，', '在高并发下怎么保证幂等？');
+    const capId = harness.handlers.get('audio:start')({ sender: { id: 77 } }, { sessionId: mergeSession.id, mode: 'system', auto: true });
+    const speechFrame = Float32Array.from({ length: 1600 }, (_, i) => Math.sin(i * 0.1) * 0.3);
+    const silenceFrame = new Float32Array(1600);
+    mode = 'pauseChat'; pendingRelease = undefined;
+    for (let i = 0; i < 5; i++) state.audioSession.frame(77, capId, 'system', speechFrame);
+    for (let i = 0; i < 6; i++) state.audioSession.frame(77, capId, 'system', silenceFrame);
+    await waitFor(() => state.audioSession.capture?.pendingText?.includes('circle light'), 'first half-sentence transcribed');
+    state.audioSession.capture.lastVoice = Date.now() - 700;
+    state.audioSession.flush();
+    await waitFor(() => !!pendingRelease, 'first half-sentence streaming started');
+    const turnsAfterFirst = state.db.getTurns(mergeSession.id).filter((t: any) => t.id !== 'rag-open-1');
+    assert.equal(turnsAfterFirst.length, 1);
+    const fastTurnId = turnsAfterFirst[0].id;
+    assert.ok(turnsAfterFirst[0].question.includes('SQLite'), 'ASR homophone circle light pre-corrected to SQLite');
+    const errorEventsBefore = harness.events.filter(([name]: any[]) => name === 'chat:error').length;
+    // Trailing half-sentence arrives -> silently aborts first stream and re-runs SAME turnId with merged question!
+    mode = 'normal';
+    for (let i = 0; i < 5; i++) state.audioSession.frame(77, capId, 'system', speechFrame);
+    for (let i = 0; i < 6; i++) state.audioSession.frame(77, capId, 'system', silenceFrame);
+    await waitFor(() => state.audioSession.capture?.pendingText?.includes('怎么保证幂等'), 'second half-sentence transcribed');
+    state.audioSession.capture.lastVoice = Date.now() - 700;
+    state.audioSession.flush();
+    await waitFor(() => state.db.getTurns(mergeSession.id).some((t: any) => t.id === fastTurnId && t.status === 'completed'), 'merged turn completed');
+    state.audioSession.stop(77);
+    const turnsAfterMerge = state.db.getTurns(mergeSession.id).filter((t: any) => t.id !== 'rag-open-1');
+    assert.equal(turnsAfterMerge.length, 1, 'Trailing half-sentence must update existing turn in place, not create duplicate turn');
+    assert.equal(turnsAfterMerge[0].id, fastTurnId);
+    assert.equal(turnsAfterMerge[0].question, '那这个 SQLite 方案，在高并发下怎么保证幂等？');
+    assert.ok(turnsAfterMerge[0].citations.length > 0, 'Merged audio question completed contextual query completion + RAG citations');
+    assert.equal(harness.events.filter(([name]: any[]) => name === 'chat:error').length, errorEventsBefore, 'Silent supersede must not emit cancelled error');
+    call('chat:delete-session', mergeSession.id);
+    pass('Actual E2E audio fast-submit + trailing half-sentence silent supersede + homophone & LLM completion RAG');
+
+    const audioTest = makeSession('audio-boundaries', '语音边界');
+    call('chat:save-session', audioTest);
+    const owner = 91;
+    const audioId = harness.handlers.get('audio:start')({sender:{id:owner}}, {sessionId:audioTest.id,mode:'system',auto:true});
+    const speak = async (question: string) => {
+      asrQueue.push(question);
+      for (let i = 0; i < 5; i++) state.audioSession.frame(owner, audioId, 'system', speechFrame);
+      for (let i = 0; i < 6; i++) state.audioSession.frame(owner, audioId, 'system', silenceFrame);
+      await waitFor(() => state.audioSession.capture?.pendingText === question, 'voice boundary transcription');
+      state.audioSession.capture.lastVoice = Date.now() - 700;
+      state.audioSession.flush();
+    };
+    await speak('线程和进程有什么区别？');
+    await waitFor(() => state.db.getTurns(audioTest.id)[0]?.status === 'completed', 'first complete voice answer');
+    await speak('死锁的四个必要条件是什么？');
+    await waitFor(() => state.db.getTurns(audioTest.id)[1]?.status === 'completed', 'second complete voice answer');
+    assert.deepEqual(state.db.getTurns(audioTest.id).map((t: any) => t.question),
+      ['线程和进程有什么区别？', '死锁的四个必要条件是什么？']);
+    mode = 'pauseChat'; pendingRelease = undefined;
+    await speak('那你们的网络模块，');
+    await waitFor(() => !!pendingRelease, 'incomplete voice question starts');
+    const cancelled = state.db.getTurns(audioTest.id).at(-1);
+    call('chat:cancel', {sessionId:audioTest.id, turnId:cancelled.id});
+    assert.equal(state.audioSession.capture.lastAutoSubmit, undefined);
+    mode = 'normal';
+    await speak('它是怎么限流的？');
+    await waitFor(() => state.db.getTurns(audioTest.id)[3]?.status === 'completed', 'voice continuation after explicit cancellation');
+    const audioTurns = state.db.getTurns(audioTest.id);
+    assert.equal(audioTurns[2].id, cancelled.id);
+    assert.equal(audioTurns[2].status, 'cancelled');
+    assert.equal(audioTurns[3].question, '它是怎么限流的？');
+    state.audioSession.stop(owner);
+    call('chat:delete-session', audioTest.id);
+    pass('Voice question boundaries preserve separate questions and cancellation; incomplete fragments can still merge');
+
+    const privateChunk = state.db.getChunk(oldIds[0]);
+    const privateFact = '唯一业务编号';
+    assert.ok(privateChunk.text.includes(privateFact));
+    const privateSession = {...makeSession('knowledge-boundaries', '知识库边界'), strategy:'docs_only', libraryIds:['default_lib']};
+    call('chat:save-session', privateSession);
+    const memory = state.db.getMemory(privateSession.id);
+    state.db.updateMemory({...memory, currentProject:'order', entries:[
+      {id:'private-fact',project:'order',kind:'fact',text:privateFact,source:{type:'document',id:privateChunk.id,quote:privateFact},confirmed:true,updatedAt:Date.now()},
+      {id:'private-summary',project:'order',kind:'working',text:'SECRET_SUMMARY_42',source:{type:'assistant',id:'generated-summary',documentIds:[privateChunk.documentId]},confirmed:false,updatedAt:Date.now()}
+    ]}, memory.revision);
+    state.db.saveTurn({id:'scoped-answer',sessionId:privateSession.id,role:'assistant',status:'completed',question:'历史项目题',
+      answer:'SECRET_DRAFT_37',answerPolicyVersion:2,retrieval:{documentIds:[],contextDocumentIds:[privateChunk.documentId]},citations:[],createdAt:1});
+    state.db.saveTurn({id:'legacy-answer',sessionId:privateSession.id,role:'assistant',status:'completed',question:'旧题',
+      answer:'UNSCOPED_LEGACY_DRAFT_27',answerPolicyVersion:2,citations:[],createdAt:2});
+    const alternativeLibrary = {id:'different-library',name:'其他资料库',description:'',docCount:0,createdAt:1,updatedAt:1};
+    call('kb:save-library', alternativeLibrary);
+    await importFile('storage-schedule.md', '# 排班项目\n\n值班编号 SCHEDULE-352。', alternativeLibrary.id);
+    const contextQuestion = '能详细讲讲这个测试吗？';
+    for (const [index, libraries] of [[], [alternativeLibrary.id], ['default_lib']].entries()) {
+      call('chat:save-session', {...privateSession, libraryIds:libraries});
+      const id = 'scope-check-' + index;
+      const before = requests.length;
+      const completionsBefore = completionInputs.length;
+      await call('chat:ask-question',{sessionId:privateSession.id,question:contextQuestion,turnId:id});
+      await waitFor(() => state.db.getTurns(privateSession.id).find((t: any) => t.id === id)?.status === 'completed', 'scoped history answer');
+      const request = requests.slice(before).find(r => r.body.messages?.at(-1)?.content === contextQuestion);
+      const prompt = JSON.stringify(request.body.messages);
+      const completion = JSON.stringify(completionInputs.slice(completionsBefore));
+      for (const marker of [privateFact, 'SECRET_SUMMARY_42', 'SECRET_DRAFT_37']) {
+        assert.equal(prompt.includes(marker), index === 2, marker);
+      }
+      if (index < 2) assert.ok(!completion.includes('SECRET_DRAFT_37') && !completion.includes('order.md'));
+      assert.ok(!prompt.includes('UNSCOPED_LEGACY_DRAFT_27') && !completion.includes('UNSCOPED_LEGACY_DRAFT_27'));
+    }
+    assert.ok(state.db.getMemory(privateSession.id).entries.some((e: any) => e.id === 'private-fact'));
+    pass('Knowledge scope filters document memory, generated notes and older drafts for chat and query completion');
+
+    const typed = '请介绍药物研发里的多肽';
+    await call('chat:ask-question',{sessionId:privateSession.id,question:typed,turnId:'typed-uncorrected'});
+    await waitFor(() => state.db.getTurns(privateSession.id).find((t: any) => t.id === 'typed-uncorrected')?.status === 'completed', 'literal typed question');
+    assert.equal(completionInputs.at(-1).source, 'typed');
+    assert.equal(completionInputs.at(-1).currentQuestion, typed);
+    assert.ok(requests.some(r => r.body.input?.[0]?.startsWith(typed)));
+    assert.ok(requests.some(r => r.body.messages?.at(-1)?.content === typed));
+    pass('Typed text stays literal even when contextual completion returns a homophone replacement');
+
+    const manualProject = '用户手动确认的项目';
+    call('chat:save-session', {...privateSession, libraryIds:[]});
+    call('memory:update', privateSession.id, {expectedRevision:state.db.getMemory(privateSession.id).revision,currentProject:manualProject});
+    await call('chat:ask-question',{sessionId:privateSession.id,question:'它是怎么部署的？',turnId:'manual-project'});
+    await waitFor(() => state.db.getTurns(privateSession.id).find((t: any) => t.id === 'manual-project')?.status === 'completed', 'manual project remains available');
+    assert.ok(JSON.stringify(requests.at(-1).body.messages).includes(manualProject));
+    assert.ok(!JSON.stringify(requests.at(-1).body.messages).includes(privateFact));
+    call('chat:delete-session', privateSession.id);
+
+    mode = 'stallEmbedBody'; chatSignal = undefined;
+    const stalledSession = await ask('stall-embed-body', '订单项目幂等方案', ['default_lib']);
+    await waitFor(() => state.db.getTurns(stalledSession).find((t: any) => t.id === 'stall-embed-body')?.status === 'completed', 'keyword fallback after embedding body timeout');
+    const fallback = state.db.getTurns(stalledSession).find((t: any) => t.id === 'stall-embed-body');
+    assert.equal(chatSignal?.aborted, true);
+    assert.ok(fallback.citations.some((c: any) => c.fileName === 'order.md'));
+    mode = 'normal';
+    pass('Stalled embedding response body times out and the actual chat flow falls back to keywords');
+
+    const newOrigin = 'https://fixture-new-provider.invalid/v1';
+    const beforeOriginTest = requests.length;
+    const rejectedTest = await call('api:test-role',{role:'chat',baseUrl:newOrigin,model:profile.modelChat});
+    assert.equal(rejectedTest.ok, false);
+    assert.equal(requests.length, beforeOriginTest);
+    assert.throws(() => call('api:save-role-config',{role:'chat',baseUrl:newOrigin,model:profile.modelChat}), /新服务的 API Key/);
+    assert.equal(call('api:get-role-configs').chat.baseUrl, profile.baseUrl);
+    assert.equal((await call('api:test-role',{role:'chat',baseUrl:profile.baseUrl+'/same-origin',model:profile.modelChat})).ok,true);
+    assert.equal(requests.at(-1).authorization, 'Bearer fixture-only-not-a-real-key');
+    assert.equal((await call('api:test-role',{role:'chat',baseUrl:newOrigin,model:profile.modelChat,key:'new-origin-test-key'})).ok,true);
+    assert.equal(requests.at(-1).authorization, 'Bearer new-origin-test-key');
+    assert.equal(requests.at(-1).url, newOrigin+'/chat/completions');
+    const edited = call('api:save-role-config',{role:'chat',baseUrl:newOrigin,model:profile.modelChat,key:'new-origin-test-key'});
+    assert.equal(edited.chat.hasKey, true);
+    assert.notEqual(edited.chat.profileId, profile.id);
+    assert.equal((await call('api:test-provider',{profileId:edited.chat.profileId,role:'chat'})).ok, true);
+    assert.equal(requests.at(-1).authorization, 'Bearer new-origin-test-key');
+    call('api:set-active-role',{role:'chat',profileId:profile.id});
+    // An answer waiting on embeddings captured the old chat endpoint.
+    mode = 'pauseEmbed'; pendingRelease = undefined;
+    const staleSession = await ask('stale-endpoint', '订单项目', ['default_lib']);
+    await waitFor(() => !!pendingRelease, 'old endpoint snapshot waiting on retrieval');
+    call('api:save-profile',{...profile,baseUrl:newOrigin});
+    assert.equal(call('api:get-role-configs').chat.hasKey, false);
+    call('api:set-key',{profileId:profile.id,key:'replacement-key'});
+    const requestsBeforeResume = requests.length;
+    mode = 'normal'; pendingRelease!();
+    await waitFor(() => state.db.getTurns(staleSession).find((t: any) => t.id === 'stale-endpoint')?.status === 'error', 'stale profile rejected before fetch');
+    assert.equal(requests.length, requestsBeforeResume);
+    saveProfile(profile);
+    pass('Saved keys stay on their original origin when testing, saving and resuming in-flight answers');
+
+    mode = 'pauseEmbed'; pendingRelease = undefined;
+    const deletion = importFile('delete-while-indexing.txt', '刪除測試 DELETE-COPY-426。');
+    await waitFor(() => !!pendingRelease, 'document embedding in flight before deletion');
+    const deleting = state.db.getDocuments().find((d: any) => d.fileName === 'delete-while-indexing.txt');
+    const original = harness.paths[0];
+    const copied = deleting.storagePath;
+    assert.ok(fs.existsSync(copied));
+    call('kb:delete-document', deleting.id);
+    assert.ok(!fs.existsSync(copied));
+    assert.ok(fs.existsSync(original));
+    pendingRelease!(); await deletion;
+    assert.equal(state.db.getDocument(deleting.id), null);
+    assert.equal(state.db.getEmbeddingsByDocument(deleting.id).length, 0);
+    assert.equal(state.keywordIndex.search('DELETE-COPY-426').length, 0);
+    call('kb:delete-document', deleting.id);
+    mode = 'normal';
+    pass('Deleting a document clears its managed copy and indexes and stays deleted when in-flight indexing completes');
 
     const bProfile = { ...profile, id: 'service-B', name: 'B', baseUrl: 'https://fixture-b.invalid/v1', createdAt: 2 };
     saveProfile(bProfile); call('api:set-active-role', { role: 'embed', profileId: bProfile.id });

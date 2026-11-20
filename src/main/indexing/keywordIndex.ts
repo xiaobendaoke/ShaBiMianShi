@@ -5,6 +5,12 @@ export interface KeywordSearchResult {
   score: number;
 }
 
+const QUERY_STOPWORDS = new Set([
+  '什么', '什么是', '怎么', '如何', '为什么', '为啥', '请问', '一下', '介绍',
+  '说说', '讲讲', '谈谈', '你们', '你的', '这个', '那个', '刚才', '当时',
+  '可以', '能不能', '是不是', '多少', '哪些', '哪里', '是', '的', '了', '吗', '呢', '吧', '在', '和', '有'
+]);
+
 export class KeywordIndex {
   private segmenter: Intl.Segmenter;
   // term -> Map<chunkId, termFrequency>
@@ -21,18 +27,19 @@ export class KeywordIndex {
     this.segmenter = new Intl.Segmenter('zh-CN', { granularity: 'word' });
   }
 
-  public tokenize(text: string): string[] {
+  public tokenize(text: string, includeBigrams: boolean = true): string[] {
     const tokens: string[] = [];
-    const segments = this.segmenter.segment(text);
+    const normalized = text.normalize('NFKC');
+    const segments = this.segmenter.segment(normalized);
 
     for (const seg of segments) {
       const term = seg.segment.trim().toLowerCase();
       // Exclude punctuation, symbols, and single whitespaces
       if (term.length > 0 && !/^[\p{P}\p{S}\s]+$/u.test(term)) {
         tokens.push(term);
-        // If Chinese term has length >= 4, add bi-grams for composite search robustness
-        if (/^[\u4e00-\u9fa5]+$/.test(term) && term.length >= 4) {
-          for (let i = 0; i < term.length - 1; i += 2) {
+        // Add sliding bi-grams for CJK compound words (3..8 chars) during indexing for sub-word recall
+        if (includeBigrams && /^[\u4e00-\u9fa5]+$/.test(term) && term.length >= 3 && term.length <= 8) {
+          for (let i = 0; i < term.length - 1; i++) {
             tokens.push(term.slice(i, i + 2));
           }
         }
@@ -41,7 +48,7 @@ export class KeywordIndex {
     return tokens;
   }
 
-  public addChunk(chunk: ChunkRecord, libraryIds?: string[]) {
+  public addChunk(chunk: ChunkRecord, libraryIds?: string[], docTitle?: string) {
     this.removeChunk(chunk.id);
 
     this.chunks.set(chunk.id, chunk);
@@ -52,7 +59,8 @@ export class KeywordIndex {
     }
     this.chunkLibraries.set(chunk.id, libSet);
 
-    const tokens = this.tokenize(chunk.text + ' ' + chunk.sectionPath);
+    const extraTitle = docTitle ? ' ' + docTitle.replace(/\.[^.]+$/, '') : '';
+    const tokens = this.tokenize(chunk.text + ' ' + chunk.sectionPath + extraTitle);
     this.docLengths.set(chunk.id, tokens.length);
     this.totalLength += tokens.length;
 
@@ -127,8 +135,22 @@ export class KeywordIndex {
       return [];
     }
 
-    const queryTokens = this.tokenize(query);
-    if (queryTokens.length === 0 || this.chunks.size === 0) return [];
+    const baseQueryTokens = this.tokenize(query, false);
+    if (baseQueryTokens.length === 0 || this.chunks.size === 0) return [];
+    const expandedTokens: string[] = [];
+    for (const t of baseQueryTokens) {
+      if (this.invertedIndex.has(t)) {
+        expandedTokens.push(t);
+      } else if (/^[\u4e00-\u9fa5]+$/.test(t) && t.length >= 3) {
+        for (let i = 0; i < t.length - 1; i++) {
+          const bg = t.slice(i, i + 2);
+          if (this.invertedIndex.has(bg)) expandedTokens.push(bg);
+        }
+      }
+    }
+    const rawQueryTokens = expandedTokens.length > 0 ? [...new Set(expandedTokens)] : baseQueryTokens;
+    const substantive = rawQueryTokens.filter(t => !QUERY_STOPWORDS.has(t));
+    const queryTokens = substantive.length > 0 ? substantive : rawQueryTokens;
 
     const N = this.chunks.size;
     const avgdl = this.totalLength / (N || 1);
@@ -143,8 +165,9 @@ export class KeywordIndex {
       if (!postings) continue;
 
       const n_qi = postings.size;
-      // BM25 IDF
-      const idf = Math.log((N - n_qi + 0.5) / (n_qi + 0.5) + 1.0);
+      // BM25 IDF + technical identifier weight boost (chips, APIs, protocols, model names)
+      const techBoost = /^[a-z][a-z\d_\-.]*$|^\d{3,}[a-z\d]*$/.test(term) && term.length >= 2 ? 1.8 : 1.0;
+      const idf = Math.log((N - n_qi + 0.5) / (n_qi + 0.5) + 1.0) * techBoost;
 
       for (const [chunkId, freq] of postings.entries()) {
         const chunk = this.chunks.get(chunkId);

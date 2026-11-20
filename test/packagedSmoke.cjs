@@ -186,6 +186,17 @@ async function run() {
   await new Promise(r=>setTimeout(r,200));
   fs.writeFileSync(path.join(output,'模型配置-统一问答.png'),(await main.capturePage()).toPNG());
   record('Packaged image/audio test fixtures load, capability response validation passes and unified model UI renders');
+
+  const changedEndpoint = await main.webContents.executeJavaScript(`window.api.testRoleConnection({
+    role:'chat', baseUrl:'http://localhost:${port}/v1', model:'qa-chat'
+  })`);
+  assert.equal(changedEndpoint.ok, false);
+  assert.match(changedEndpoint.message, /新服务的 API Key/);
+  const notes = documents.find(document => document.fileName === 'notes.txt');
+  assert.ok(fs.existsSync(notes.storagePath));
+  await main.webContents.executeJavaScript(`window.api.deleteDocument(${JSON.stringify(notes.id)})`);
+  assert.ok(!fs.existsSync(notes.storagePath) && fs.existsSync(files[1]));
+  record('Packaged preload and main enforce the new endpoint credential boundary and remove the managed document copy');
   assert.ok(!runtimeErrors.some(e => /Uncaught|TypeError|ReferenceError/.test(e)), JSON.stringify(runtimeErrors));
 }
 app.whenReady().then(async () => {

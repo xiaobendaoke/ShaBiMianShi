@@ -5,6 +5,7 @@ import {VectorIndex} from '../src/main/indexing/vectorIndex';
 import {RetrievalService} from '../src/main/indexing/retrievalService';
 import {resolveProjectFocus,caseSection,answeredCase} from '../src/main/services/projectFocus';
 import {selectedProject} from '../src/main/services/sessionMemory';
+import {parseMarkdown} from '../src/main/parsers/mdParser';
 import type {ChunkRecord} from '../src/main/types';
 const docs=[{id:'sms',fileName:'8295 车载座舱离线短信分类.md'},{id:'vision',fileName:'RK3588 YOLOv11n.md'},{id:'audio',fileName:'RK3588 语音全链路.md'},{id:'other',fileName:'attention mappo.md'}];
 assert.equal(answeredCase('我处理的是INT8量化校准问题',[{sectionPath:'项目 > 案例一：缓存 > 根因',text:'FastRPC缓存一致性问题',documentId:'s'},{sectionPath:'项目 > 案例二：量化 > 根因',text:'INT8量化校准代表集偏差',documentId:'s'}]),'项目 > 案例二：量化');
@@ -35,5 +36,30 @@ assert.deepEqual(resolveProjectFocus('电机振动监测怎么定位异常？',g
 assert.deepEqual(resolveProjectFocus('仓储机器人路径规划怎么处理？',genericDocs).documentIds,['planner']);
 assert.deepEqual(resolveProjectFocus('订单最后结果呢？',genericDocs,focus).documentIds.sort(),['order-main','order-test']);
 assert.deepEqual(resolveProjectFocus('最后结果呢？',genericDocs,focus).documentIds,[],'Deleted/out-of-library prior document cannot be inherited');
-console.log('PASS Project aliases, explicit switch, follow-up scope, ambiguity, whole-case evidence, library boundary and budget diagnostics');
+
+// Regression: de-poisoned real document names, Kangxi NFKC normalization, root H1 retention, and .md authority over .pdf resume
+const realDocs=[
+  {id:'resume',fileName:'候选人 _ 嵌入式软件 · 边缘AI.pdf',fileType:'pdf' as const},
+  {id:'d8295',fileName:'8295 车载座舱 NPU 离线短信四分类系统.md',fileType:'md' as const},
+  {id:'dmappo',fileName:'attention mappo项目.md',fileType:'md' as const},
+  {id:'daudio',fileName:'RK3588全链路集成.md',fileType:'md' as const,headings:['RK3588 全链路端侧本地语音 AI 系统技术全景与面试指南']},
+  {id:'dyolo',fileName:'RK3588YOLOv11n.md',fileType:'md' as const,headings:['基于 RK3588 NPU + YOLO11n 实时桌面安全监控系统']}
+];
+assert.deepEqual(resolveProjectFocus('FastAPI推流是怎么做并发控制的？',realDocs).documentIds,[],'Generic words like API/并发 must not mislock to 8295 or YOLO');
+assert.deepEqual(resolveProjectFocus('语音唤醒的关键词是怎么检测的？',realDocs).documentIds,['daudio'],'关键词 must not mislock to YOLOv11n; 语音 matches audio project');
+assert.deepEqual(resolveProjectFocus('你的AI推理只有65帧吗？',realDocs).documentIds,[],'AI from 边缘AI.pdf must not lock out YOLO');
+assert.deepEqual(resolveProjectFocus('嗯，那整体帧率大概能跑多少？',realDocs,{documentIds:['dyolo'],name:'RK3588YOLOv11n',reason:'本题项目标识匹配',anchor:'RK3588上的YOLO11n'}).documentIds,['dyolo'],'Spoken filler prefix still inherits active project on follow-up');
+
+const mdParsed=parseMarkdown('# RK3588 全链路语音系统\n简介\n# 一、系统架构\n架构正文\n# 二、性能优化\n优化正文');
+assert.ok(mdParsed.sections.some(s=>s.title==='RK3588 全链路语音系统 > 二、性能优化'),'Root H1 title stays anchored across subsequent numbered H1 chapters');
+
+const nfkcIdx=new KeywordIndex();
+nfkcIdx.addChunk({id:'res_c1',documentId:'resume',documentVersion:1,libraryId:'lib',ordinal:1,sectionPath:'第 1 页',text:'中⼭⼤学硕⼠ · ⼼语⼼⾔ · ⾳频延时降低40% · 兵装集团 Procise 与 BootLoader 调优 · 8295 短信分类 TFLite 99KB',pageStart:1,pageEnd:1,sourceStart:0,sourceEnd:50,tokenEstimate:30,contentHash:'r1',createdAt:0},['lib'],'候选人 _ 嵌入式软件 · 边缘AI.pdf');
+nfkcIdx.addChunk({id:'md8295_c1',documentId:'d8295',documentVersion:1,libraryId:'lib',ordinal:1,sectionPath:'8295 > 模型部署',text:'8295 短信四分类采用 Qualcomm QNN SDK 部署在 Hexagon HTP，INT8 模型大小 101KB。',pageStart:null,pageEnd:null,sourceStart:0,sourceEnd:50,tokenEstimate:30,contentHash:'m1',createdAt:0},['lib'],'8295 车载座舱 NPU 离线短信四分类系统.md');
+const nfkcService=new RetrievalService(nfkcIdx,new VectorIndex(),{getDocument:id=>realDocs.find(d=>d.id===id) as any});
+assert.equal((await nfkcService.retrieve({query:'中山大学 心语心言 音频延时',libraryIds:['lib']})).items[0]?.documentId,'resume','Kangxi radicals match standard UTF-8 queries via NFKC');
+assert.equal((await nfkcService.retrieve({query:'8295 短信分类 模型大小',libraryIds:['lib']})).items[0]?.documentId,'d8295','.md project detail document outranks conflicting .pdf resume chunk');
+assert.equal((await nfkcService.retrieve({query:'兵装 BootLoader Procise',libraryIds:['lib']})).items[0]?.documentId,'resume','Resume-exclusive internship experience still ranks #1');
+
+console.log('PASS Project aliases, explicit switch, follow-up scope, ambiguity, whole-case evidence, NFKC, .md authority, library boundary and budget diagnostics');
 

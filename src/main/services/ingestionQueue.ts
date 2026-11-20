@@ -7,7 +7,7 @@ import { KeywordIndex } from '../indexing/keywordIndex';
 import { VectorIndex } from '../indexing/vectorIndex';
 import { embeddingSpaceKey } from '../indexing/embeddingSpace';
 import { restoreEmbeddingIndex } from '../indexing/embeddingLifecycle';
-import { ProviderService } from './providerService';
+import { ProviderService, embeddingDimensions } from './providerService';
 import { parseDocument } from '../parsers';
 import { chunkDocument } from '../chunker/chunker';
 import { DocumentRecord, DocumentStatus } from '../types';
@@ -103,6 +103,22 @@ export class IngestionQueue extends EventEmitter {
     this.emit('task-updated', this.getStats());
   }
 
+  public deleteDocument(id: string) {
+    const document = this.db.getDocument(id);
+    if (!document) return;
+    const copyName = `${document.id}_${document.fileName}`;
+    if (path.basename(copyName) !== copyName) throw new Error('文档副本路径无效');
+    // The managed filename still locates the copy after moving the user data directory.
+    fs.rmSync(path.join(this.storageDir, copyName), { force: true });
+    const chunks = this.db.getChunksByDocument(id);
+    this.db.deleteEmbeddingsByDocument(id);
+    this.db.deleteDocument(id);
+    for (const chunk of chunks) {
+      this.keywordIndex.removeChunk(chunk.id);
+      this.vectorIndex.removeVector(chunk.id);
+    }
+  }
+
   private async processNext() {
     if (this.activeCount >= this.concurrency || this.queue.length === 0) {
       return;
@@ -156,20 +172,18 @@ export class IngestionQueue extends EventEmitter {
       // The last library may have been deleted: reconstruct actual chunks, not
       // just an association for a chunk that no longer exists in memory.
       for (const chunk of this.db.getChunksByDocument(existingDoc.id)) {
-        this.keywordIndex.addChunk(chunk, existingDoc.libraryIds);
+        this.keywordIndex.addChunk(chunk, existingDoc.libraryIds, existingDoc.fileName);
       }
       restoreEmbeddingIndex(this.db, this.vectorIndex, this.db.getActiveProfile('embed'));
       task.status = existingDoc.status;
       return;
     }
 
-    // Save copy to storage directory
+    // Parse first so a failed import cannot leave an untracked document copy.
+    const parsed = await parseDocument(task.fileName, buffer);
     const docId = `doc_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
     const savedPath = path.join(this.storageDir, `${docId}_${task.fileName}`);
     fs.writeFileSync(savedPath, buffer);
-
-    // 2. Parse Document asynchronously
-    const parsed = await parseDocument(task.fileName, buffer);
 
     const docRecord: DocumentRecord = {
       id: docId,
@@ -199,7 +213,7 @@ export class IngestionQueue extends EventEmitter {
 
     // 4. Index Chunks for Keyword Search
     for (const chunk of chunks) {
-      this.keywordIndex.addChunk(chunk, docRecord.libraryIds);
+      this.keywordIndex.addChunk(chunk, docRecord.libraryIds, docRecord.fileName);
     }
 
     // 5. Generate Vector Embeddings (P1-01)
@@ -215,6 +229,7 @@ export class IngestionQueue extends EventEmitter {
           this.emit('task-progress', task);
         });
 
+        if (!this.db.getDocument(docId)) return;
         const dimensions = this.validateVectors(vectors, chunks.length);
         const spaceKey = embeddingSpaceKey(activeEmbedProfile);
         const selected = this.db.getActiveProfile('embed');
@@ -250,7 +265,9 @@ export class IngestionQueue extends EventEmitter {
       docRecord.status = 'keyword_only';
     }
 
-    this.db.saveDocument(docRecord);
+    const currentDocument = this.db.getDocument(docId);
+    if (!currentDocument) return;
+    this.db.saveDocument({...docRecord, libraryIds: currentDocument.libraryIds});
     task.status = docRecord.status;
   }
 
@@ -275,10 +292,12 @@ export class IngestionQueue extends EventEmitter {
     if (!current || embeddingSpaceKey(current) !== spaceKey) {
       throw new Error('重建期间嵌入配置已变化；未替换现有索引，请使用当前配置重新重建');
     }
-    this.db.saveEmbeddings(chunks.map((chunk, i) => ({
+    const retained = chunks.flatMap((chunk, i) => this.db.getChunk(chunk.id) ? [{
       chunkId: chunk.id, profileId: activeEmbedProfile.id,
       model: activeEmbedProfile.modelEmbed, spaceKey, dimensions, vector: vectors[i]
-    })));
+    }] : []);
+    if (!retained.length) return { processed: chunks.length, succeeded: 0 };
+    this.db.saveEmbeddings(retained);
     this.db.saveEmbeddingProfile({ profileId: activeEmbedProfile.id,
       model: activeEmbedProfile.modelEmbed, spaceKey, dimensions });
     restoreEmbeddingIndex(this.db, this.vectorIndex, current);
@@ -290,12 +309,11 @@ export class IngestionQueue extends EventEmitter {
       }
     }
 
-    return { processed: chunks.length, succeeded: vectors.length };
+    return { processed: chunks.length, succeeded: retained.length };
   }
   private validateVectors(vectors: number[][], expected: number): number {
-    const dimensions = vectors[0]?.length ?? 0;
-    if (vectors.length !== expected || !dimensions || vectors.some(v =>
-      !Array.isArray(v) || v.length !== dimensions || v.some(n => !Number.isFinite(n)))) {
+    const dimensions = embeddingDimensions(vectors, expected);
+    if (!dimensions) {
       throw new Error('向量响应数量、维度或数值不合法；现有索引未替换');
     }
     return dimensions;

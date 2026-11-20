@@ -114,7 +114,7 @@ export class VectorIndex {
     this.profile = null;
   }
 
-  public search(queryVector: number[] | Float32Array, allowedLibraryIds?: string[], topK: number = 30): VectorSearchResult[] {
+  public search(queryVector: number[] | Float32Array, allowedLibraryIds?: string[], topK: number = 30, allowedChunkIds?: Set<string>): VectorSearchResult[] {
     // Explicit empty array means user selected 0 libraries -> return 0 results immediately
     if (allowedLibraryIds !== undefined && allowedLibraryIds.length === 0) {
       return [];
@@ -146,6 +146,7 @@ export class VectorIndex {
     let minTopScore = -Infinity;
 
     for (const [chunkId, v] of this.vectors.entries()) {
+      if (allowedChunkIds && !allowedChunkIds.has(chunkId)) continue;
       if (allowedLibs) {
         const libs = this.chunkLibraries.get(chunkId);
         let matches = false;
