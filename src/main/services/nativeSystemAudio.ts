@@ -6,7 +6,14 @@ export class NativeSystemAudio {
   private cancel?:()=>void;
   async start(executable:string,frame:(samples:Float32Array)=>void,health:(value:{frames:number;rms:number;state:string})=>void,failed:(message:string)=>void) {
     this.stop();if(!fs.existsSync(executable))throw Error('缺少系统声音采集组件，请使用最新完整安装包');
-    const child=spawn(executable,[],{stdio:'pipe'});this.child=child;
+    let command=executable;let args:string[]=[];
+    if(process.platform==='win32'){
+      try{
+        const head=fs.readFileSync(executable,'utf8').slice(0,256);
+        if(head.startsWith('#!')){command=head.slice(2).split(/\r?\n/)[0].trim();args=[executable];}
+      }catch{}
+    }
+    const child=spawn(command,args,{stdio:'pipe'});this.child=child;
     let input=Buffer.alloc(0),sum=0,count=0,offset=0,output=new Float32Array(1600),frames=0,rms=0,lastFrame=Date.now(),lastSound=0;
     let ready=false,settled=false,diagnostic='';let timeout:ReturnType<typeof setTimeout>;
     await new Promise<void>((resolve,reject)=>{

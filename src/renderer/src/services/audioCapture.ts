@@ -2,11 +2,18 @@ import type { AudioSource } from '../../../main/types';
 const processor = `class FrameCapture extends AudioWorkletProcessor {
   constructor() { super(); this.buffer = new Float32Array(1600); this.offset = 0; this.position = 0; this.sum = 0; this.count = 0; }
   process(inputs) {
-    const input = inputs[0]; if (!input || !input[0]) return true;
+    const input = inputs[0];
+    const hasChannels = !!(input && input[0] && input[0].length);
+    const frameCount = hasChannels ? input[0].length : 128;
     const ratio = sampleRate / 16000;
-    for (let i = 0; i < input[0].length; i++) {
-      let value = 0; for (const channel of input) value += channel[i];
-      this.sum += value / input.length; this.count++;
+    for (let i = 0; i < frameCount; i++) {
+      let sample = 0;
+      if (hasChannels) {
+        let value = 0;
+        for (const channel of input) value += channel[i];
+        sample = value / input.length;
+      }
+      this.sum += sample; this.count++;
       this.position += 1;
       if (this.position < ratio) continue;
       this.position -= ratio;

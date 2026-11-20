@@ -40,7 +40,7 @@ export class KeyVault {
       this.cache=new Map(Object.entries(data));this.state='ready';
     } catch {this.state='locked';this.cache.clear();}
   }
-  getHealth() {return {state:this.state, message:this.state==='locked'?'无法解密已有密钥，已禁止覆盖。请使用原应用身份解锁系统钥匙串后完整重启。':undefined};}
+  getHealth() {return {state:this.state, message:this.state==='locked'?'无法解密已有密钥，已禁止覆盖。请使用原系统账户凭据或钥匙串解锁后完整重启。':undefined};}
   private assertWritable() {if(this.state==='locked') throw Error(this.getHealth().message);}
   private save(next: Map<string,string>) {
     this.assertWritable();

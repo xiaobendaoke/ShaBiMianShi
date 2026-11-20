@@ -44,7 +44,7 @@ async function compileMain() {
           a.path === 'electron' ? `const h=globalThis.__productionTest; export default {app:{requestSingleInstanceLock:()=>true,whenReady:()=>Promise.resolve(),getPath:()=>h.directory,getAppPath:()=>h.directory,setPath:()=>{},setName:()=>{},on:()=>{},quit:()=>{},getVersion:()=>"test"},session:{defaultSession:{setDisplayMediaRequestHandler:()=>{}}},ipcMain:{handle:(k,v)=>h.handlers.set(k,v),on:(k,v)=>h.handlers.set(k,v)},globalShortcut:{register:()=>true,unregisterAll:()=>{}},BrowserWindow:{getAllWindows:()=>[]},dialog:{showErrorBox:()=>{},showOpenDialog:async()=>({canceled:false,filePaths:h.paths})}};` :
           a.path === 'windows' ? `export class WindowManager{createMainWindow(){}getMainWindow(){return {}}broadcast(...args){globalThis.__productionTest.events.push(structuredClone(args))}toggleFloatingWindow(){}setOpacity(){}setContentProtection(){}}` :
           'export class MockAiServer{constructor(){}async start(){}async stop(){}}' }));
-        b.onLoad({ filter: /src\/main\/index\.ts$/ }, a => {
+        b.onLoad({ filter: /src[\\/]main[\\/]index\.ts$/ }, a => {
           const source = fs.readFileSync(a.path, 'utf8');
           assert.ok(source.includes('  registerIpc();'));
           return { loader: 'ts', contents: source.replace('  registerIpc();',

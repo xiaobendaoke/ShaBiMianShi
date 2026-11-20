@@ -2,7 +2,7 @@ import { AnswerContent } from './AnswerContent';
 import React, { useState, useEffect, useRef } from 'react';
 import { Pin, PinOff, X, Eye, FileText, MousePointer, Camera, Crop, Loader2 } from 'lucide-react';
 import { TurnRecord, CitationSnapshot } from '../../../main/types';
-import { Badge, Kbd, cx } from './ui';
+import { Badge, Kbd, cx, formatShortcut } from './ui';
 
 export const FloatingWindowView: React.FC = () => {
   const [currentTurn, setCurrentTurn] = useState<TurnRecord | null>(null);
@@ -126,10 +126,10 @@ export const FloatingWindowView: React.FC = () => {
         </div>
 
         <div className="no-drag flex items-center gap-0.5">
-          <button onClick={() => handleCaptureScreen('interactive')} disabled={isCapturing} className={hudButton()} title="选区截屏识题 (快捷键: Cmd+Alt+X)">
+          <button onClick={() => handleCaptureScreen('interactive')} disabled={isCapturing} className={hudButton()} title={`选区截屏识题 (快捷键: ${formatShortcut('Cmd+Alt+X', 'Ctrl+Alt+X')})`}>
             {isCapturing ? <Loader2 size={13} className="animate-spin text-accent" /> : <Crop size={13} />}
           </button>
-          <button onClick={handleToggleClickThrough} className={hudButton(isClickThrough)} title={isClickThrough ? '退出鼠标穿透 (快捷键: Cmd+Shift+P)' : '开启鼠标穿透 (点击穿透至后方应用，快捷键: Cmd+Shift+P)'}>
+          <button onClick={handleToggleClickThrough} className={hudButton(isClickThrough)} title={isClickThrough ? `退出鼠标穿透 (快捷键: ${formatShortcut('Cmd+Shift+P', 'Ctrl+Shift+P')})` : `开启鼠标穿透 (点击穿透至后方应用，快捷键: ${formatShortcut('Cmd+Shift+P', 'Ctrl+Shift+P')})`}>
             <MousePointer size={13} />
           </button>
           <div className="flex items-center gap-1 px-1" title="调节透明度">
@@ -149,7 +149,7 @@ export const FloatingWindowView: React.FC = () => {
       {isClickThrough && (
         <div className="bg-accent-soft px-3 py-1 text-[11px] text-accent-text flex items-center justify-between shrink-0">
           <span>穿透模式已生效：鼠标点击将穿透至后方应用</span>
-          <Kbd>⇧⌘P 退出</Kbd>
+          <Kbd>{formatShortcut('⇧⌘P', 'Ctrl+Shift+P')} 退出</Kbd>
         </div>
       )}
 

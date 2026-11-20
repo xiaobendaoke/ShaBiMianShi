@@ -1,7 +1,7 @@
 import React from 'react';
 import { Check } from 'lucide-react';
 import { AnsweringStrategy, SessionRecord } from '../../../main/types';
-import { Group, Kbd, PageHeader, Row, Switch, Toolbar, cx } from './ui';
+import { Group, Kbd, PageHeader, Row, Switch, Toolbar, cx, isMacPlatform } from './ui';
 
 interface SettingsViewProps {
   currentSession: SessionRecord | null;
@@ -36,16 +36,21 @@ const styles = [
   { id: 'system_design', name: '系统设计', desc: '容量估算、高可用选型、分库分表与降级方案' }
 ] as const;
 
+const modKey = isMacPlatform ? '⌘' : 'Ctrl';
+const altKey = isMacPlatform ? '⌥' : 'Alt';
+const shiftKey = isMacPlatform ? '⇧' : 'Shift';
+const enterKey = isMacPlatform ? '↩' : 'Enter';
+
 const shortcuts: Array<[string, string[]]> = [
-  ['呼出 / 隐藏独立悬浮窗', ['⌘', '⇧', 'Space']],
-  ['切换悬浮窗鼠标穿透模式', ['⌘', '⇧', 'P']],
-  ['全屏截屏识题并作答', ['⌘', '⇧', 'S']],
-  ['选区截屏识题并作答', ['⌘', '⌥', 'X']],
-  ['开始 / 暂停 / 继续监听', ['⌘', '⇧', 'G']],
-  ['立即回答语音问题', ['⌘', '⇧', '↩']],
-  ['切换本人回答状态', ['⌘', '⇧', 'M']],
-  ['上一题 / 下一题', ['⌘', '⌥', '← / →']],
-  ['答案滚动', ['⌘', '↑ / ↓']],
+  ['呼出 / 隐藏独立悬浮窗', [modKey, shiftKey, 'Space']],
+  ['切换悬浮窗鼠标穿透模式', [modKey, shiftKey, 'P']],
+  ['全屏截屏识题并作答', [modKey, shiftKey, 'S']],
+  ['选区截屏识题并作答', [modKey, altKey, 'X']],
+  ['开始 / 暂停 / 继续监听', [modKey, shiftKey, 'G']],
+  ['立即回答语音问题', [modKey, shiftKey, enterKey]],
+  ['切换本人回答状态', [modKey, shiftKey, 'M']],
+  ['上一题 / 下一题', [modKey, altKey, '← / →']],
+  ['答案滚动', [modKey, '↑ / ↓']],
   ['快速发送当前问题', ['Enter']]
 ];
 
@@ -100,8 +105,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
           </section>
 
-          <Group title="macOS 窗口防窥与录屏保护" footer="内容保护在不同录屏与会议软件中的效果需要自行验证，不保证始终不可见。">
-            <Row label="开启 setContentProtection 保护" detail="利用 macOS 原生 Window 属性阻止腾讯会议、钉钉、Zoom 等主流会议软件在屏幕共享时捕捉助手窗口。">
+          <Group title="窗口防窥与录屏保护" footer="内容保护在不同录屏与会议软件中的效果需要自行验证，不保证始终不可见。">
+            <Row label="开启 setContentProtection 保护" detail="利用操作系统原生窗口防捕获属性（Windows WDA_EXCLUDEFROMCAPTURE / macOS NSWindowSharingNone）阻止主流会议软件在共享屏幕时捕捉助手窗口。">
               <span className={cx('text-[12px]', contentProtected ? 'text-success' : 'text-label-3')}>{contentProtected ? '保护已启用' : '未启用'}</span>
               <Switch checked={contentProtected} onChange={onToggleProtection} label={contentProtected ? '保护已启用' : '点击启用保护'} />
             </Row>

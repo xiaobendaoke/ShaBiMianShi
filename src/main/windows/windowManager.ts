@@ -46,15 +46,22 @@ export class WindowManager {
     // The UI is white-only; keep native controls and menus light as well.
     if (nativeTheme) nativeTheme.themeSource = 'light';
 
+    const isMac = process.platform === 'darwin';
     this.mainWindow = new BrowserWindowConstructor({
       width: 1200,
       height: 800,
       minWidth: 900,
       minHeight: 600,
       title: '傻逼面试 - 知识库与面试辅助',
-      // Unified toolbar: traffic lights inset into the white sidebar.
-      titleBarStyle: 'hiddenInset',
-      trafficLightPosition: { x: 18, y: 18 },
+      ...(isMac
+        ? {
+            // Unified toolbar on macOS: traffic lights inset into the white sidebar.
+            titleBarStyle: 'hiddenInset' as const,
+            trafficLightPosition: { x: 18, y: 18 }
+          }
+        : {
+            autoHideMenuBar: true
+          }),
       backgroundColor: '#ffffff',
       webPreferences: {
         preload: path.join(__dirname, '../preload/index.js'),
