@@ -1,6 +1,7 @@
-import {resolveProjectFocus,caseSection,answeredCase} from './services/projectFocus';
+import {resolveProjectFocus,caseSection,answeredCase,isIdentityOrResumeQuery,isResumeDocument,isClearStandaloneTechOrCodeQuestion} from './services/projectFocus';
 import {memoryContext,recentContext,verifiedMemoryPatch,isUserCorrection,selectedProject,turnContextDocuments,type MemorySource} from './services/sessionMemory';
 import {preCorrectAsrText,shouldRunLlmCompletion} from './services/queryCompletion';
+import { explicitThinkingDecision, preferredThinkingMode } from './services/thinkingRoute';
 import { BUILD_ID, IPC_VERSION, SCHEMA_VERSION } from '../shared/runtime';
 import { backupUserData } from './services/dataBackup';
 import electron from 'electron';
@@ -14,14 +15,14 @@ import { VectorIndex } from './indexing/vectorIndex';
 import { embeddingSpaceKey } from './indexing/embeddingSpace';
 import { restoreEmbeddingIndex, ensureEmbeddingIndex, indexMatchesProvider } from './indexing/embeddingLifecycle';
 import { RetrievalService } from './indexing/retrievalService';
-import { ProviderService, providerOrigin, sameProviderOrigin } from './services/providerService';
+import { ProviderService, providerOrigin, sameProviderOrigin, supportsThinkingMode } from './services/providerService';
 import { IngestionQueue } from './services/ingestionQueue';
 import { MockAiServer } from './services/mockServer';
 import { WindowManager } from './windows/windowManager';
 import { AudioSessionService } from './services/audioSession';
 import {NativeSystemAudio} from './services/nativeSystemAudio';
 import { CaptureCoordinator } from './services/captureCoordinator';
-import type { AnswerOptions, AudioSource } from './types';
+import type { AnswerOptions, AudioSource, ThinkingDecision } from './types';
 import { captureScreen } from './services/screenCapture';
 import { PRESET_INTERVIEW_BANK_CONTENT } from './resources/presetInterviewBank';
 import {
@@ -90,7 +91,9 @@ function drainQuestions() {
   }
 }
 function submitQuestion(sessionId: string, rawQuestion: string, libraryIds?: string[], turnId: string = crypto.randomUUID(), options: AnswerOptions = {}) {
-  if (!db.getSessions().some(s => s.id === sessionId)) throw new Error('会话不存在');
+  const session = db.getSessions().find(s => s.id === sessionId);
+  if (!session) throw new Error('会话不存在');
+  options = {...options, thinkingMode: preferredThinkingMode(options, session.thinkingMode)};
   const question = options.audioTiming ? preCorrectAsrText(rawQuestion) : rawQuestion;
   if (!question?.trim()) throw new Error('问题不能为空');
   if (activeTurns.has(turnId) || pendingQuestions.some(q => q.turnId === turnId) || db.getTurns(sessionId).some(t => t.id === turnId)) throw new Error('问题ID已在使用');
@@ -109,6 +112,7 @@ function supersedeQuestion(sessionId: string, fragment: string, continuation: {t
   if (!existing || existing.status === 'cancelled' || existing.status === 'error') {
     return submitQuestion(sessionId, fragment, undefined, undefined, options);
   }
+  options = {...options, thinkingMode: existing.options?.thinkingMode};
   const question = preCorrectAsrText(mergedQuestion);
   const queued = pendingQuestions.find(q => q.turnId === turnId && q.sessionId === sessionId);
   if (queued) {
@@ -522,9 +526,10 @@ function executeAskQuestion(
     settled = true;
     turn.status = controller.signal.aborted ? 'cancelled' : 'error';
     turn.error = error.message;
+    turn.timings!.totalMs = Date.now() - turn.timings!.startedAt;
     db.saveTurn(turn);
     activeTurns.delete(turnId); setTimeout(drainQuestions, 0);
-    windowManager.broadcast('chat:error', { turnId, sessionId, error: error.message, status: turn.status });
+    windowManager.broadcast('chat:error', { turnId, sessionId, error: error.message, status: turn.status, timings: turn.timings });
   };
   activeTurns.set(turnId, {
     controller,
@@ -561,9 +566,22 @@ function executeAskQuestion(
   let previousFocus: ReturnType<typeof resolveProjectFocus> | undefined;
   for (let i = completedBefore.length - 1; i >= Math.max(0, completedBefore.length - 4); i--) {
     const candidate = completedBefore[i];
-    const candidateFocus = candidate.retrieval?.documentIds?.length
+    let candidateFocus = candidate.retrieval?.documentIds?.length
       ? candidate.retrieval
       : resolveProjectFocus(candidate.question, projects);
+    if (!candidateFocus.documentIds.length && candidate.citations?.length && candidate.retrieval?.intent !== 'general_tech') {
+      const projCiteCounts = new Map<string, number>();
+      for (const c of candidate.citations) {
+        const p = projects.find(pr => pr.id === c.documentId && !isResumeDocument(pr) && !/真题|题库|考点|八股/.test(pr.fileName));
+        if (p) projCiteCounts.set(p.id, (projCiteCounts.get(p.id) || 0) + 1);
+      }
+      const sortedProj = [...projCiteCounts.entries()].sort((a, b) => b[1] - a[1]);
+      const totalProjCites = sortedProj.reduce((s, [, n]) => s + n, 0);
+      if (sortedProj.length === 1 || (sortedProj.length > 1 && sortedProj[0][1] / totalProjCites >= 0.75)) {
+        const dom = projects.find(pr => pr.id === sortedProj[0][0])!;
+        candidateFocus = { documentIds: [dom.id], name: dom.fileName.replace(/\.[^.]+$/, ''), reason: '上一轮检索命中项目', anchor: candidate.question };
+      }
+    }
     if (candidateFocus.documentIds.length > 0) {
       previousFocusTurn = candidate;
       previousFocus = candidateFocus;
@@ -578,17 +596,46 @@ function executeAskQuestion(
       let searchQuery = focus.reason === '连续追问继承上一题项目'
         ? `${focus.anchor}\n本次追问：${question}`
         : question;
-      let intent: 'project_or_resume' | 'general_tech' | 'chatter' = 'project_or_resume';
+      let intent: 'project_or_resume' | 'general_tech' | 'chatter' =
+        !isIdentityOrResumeQuery(question) && isClearStandaloneTechOrCodeQuestion(question)
+          ? 'general_tech'
+          : 'project_or_resume';
       const completionDocuments = new Set<string>();
-
-      if (shouldRunLlmCompletion({
+      const useCompletion = shouldRunLlmCompletion({
         question,
         options,
         hasLibraries: selectedLibraries.length > 0,
         historyCount: completedBefore.length,
         focusReason: focus.reason
-      }) && keyVault.hasKey(chatProfile.id)) {
+      }) && keyVault.hasKey(chatProfile.id);
+      const canSetThinking = supportsThinkingMode(chatProfile);
+      let thinking = canSetThinking ? explicitThinkingDecision(preferredThinkingMode(options, session.thinkingMode), options, question, focus.reason) : undefined;
+      const classifyThinking = canSetThinking && !thinking;
+      let routing: Promise<ThinkingDecision | undefined> | undefined;
+      if (classifyThinking && !useCompletion) {
+        const routeStart = Date.now();
+        routing = providerService.classifyThinking(chatProfile, question, completedBefore.slice(-2).map(t => ({
+          question: t.question.slice(0, 260),
+          answerSummary: t.answer.slice(0, 220)
+        })), controller.signal).then((mode): ThinkingDecision | undefined => mode ? {mode, source:'model'} : undefined)
+          .catch(() => undefined)
+          .finally(() => {turn.timings!.routingMs = Date.now() - routeStart;});
+      }
+
+      ensureEmbeddingIndex(db, vectorIndex, embedProfile);
+      const canEmbed = !!(embedProfile && selectedLibraries.length && !options.images?.length &&
+        vectorIndex.size && indexMatchesProvider(vectorIndex, embedProfile) && keyVault.hasKey(embedProfile.id));
+      let optimisticEmbedQuery: string | undefined;
+      let optimisticEmbedPromise: Promise<number[] | undefined> | undefined;
+
+      if (useCompletion) {
         const compStart = Date.now();
+        if (options.audioTiming && canEmbed) {
+          optimisticEmbedQuery = `${previousFocus?.name && !previousFocus.name.includes(' / ') ? previousFocus.name + ' ' : ''}${question}`.trim();
+          const prefetchDeadline = AbortSignal.timeout(Math.min(embedProfile!.timeoutMs || 30000, 3000));
+          optimisticEmbedPromise = providerService.generateEmbeddings(embedProfile!, [optimisticEmbedQuery], undefined,
+            AbortSignal.any([controller.signal, prefetchDeadline])).then(v => v[0]).catch(() => undefined);
+        }
         try {
           const docCatalog = projects.map(p => {
             const docRec = db.getDocument(p.id);
@@ -602,6 +649,7 @@ function executeAskQuestion(
           const comp = await providerService.completeQuery(chatProfile, {
             question,
             fromAudio: !!options.audioTiming,
+            classifyThinking,
             activeProject: previousFocus?.name && !previousFocus.name.includes(' / ') ? previousFocus.name : undefined,
             documents: docCatalog,
             recentTurns: completedBefore.slice(-4).map(t => ({
@@ -611,27 +659,43 @@ function executeAskQuestion(
             }))
           }, controller.signal);
           turn.timings!.completionMs = Date.now() - compStart;
-          intent = comp.intent;
+          if (classifyThinking && comp.thinkingMode) thinking = {mode:comp.thinkingMode, source:'completion'};
+          const rewritten = comp.rewrittenQuestion || question;
+          const effectiveIdentity = isIdentityOrResumeQuery(question) || isIdentityOrResumeQuery(rewritten);
+          intent = effectiveIdentity ? 'project_or_resume' : comp.intent;
           for (const prior of completedBefore.slice(-4)) {
             for (const documentId of turnContextDocuments(prior)) completionDocuments.add(documentId);
           }
           if (options.audioTiming) {
-            effectiveQuestion = comp.rewrittenQuestion || question;
+            effectiveQuestion = rewritten;
             if (effectiveQuestion !== question) for (const doc of docCatalog) completionDocuments.add(doc.id);
           }
           searchQuery = options.audioTiming ? comp.searchQuery || effectiveQuestion : `${question}\n${comp.searchQuery}`;
+          if (effectiveQuestion !== question && !effectiveIdentity) {
+            const explicitFromRewrite = resolveProjectFocus(effectiveQuestion, projects, previousFocus);
+            if (explicitFromRewrite.reason === '本题项目标识匹配' || explicitFromRewrite.reason === '跨项目问题，分别使用各项目资料') {
+              focus = explicitFromRewrite;
+            }
+          }
+          const lockedExplicit = focus.reason === '本题项目标识匹配' || focus.reason === '跨项目问题，分别使用各项目资料';
           if (intent === 'general_tech' || intent === 'chatter') {
-            if (focus.reason !== '本题项目标识匹配') {
+            if (!lockedExplicit) {
               focus = { documentIds: [], name: '', reason: intent === 'chatter' ? '日常寒暄试音，跳过检索' : '通用技术概念题，开放核对', anchor: effectiveQuestion };
             }
-          } else if (comp.targetDocIds.length > 0 && focus.reason !== '本题项目标识匹配') {
+          } else if (effectiveIdentity && !lockedExplicit) {
+            focus = { documentIds: [], name: '', reason: '个人身份与简历背景提问，优先检索简历', anchor: effectiveQuestion };
+          } else if (comp.targetDocIds.length > 0 && !lockedExplicit) {
             const targetDocs = projects.filter(p => comp.targetDocIds.includes(p.id));
             if (targetDocs.length > 0) {
+              const needsResumeAttribution = /公司|实习|哪家|哪段|单位|实验室/.test(effectiveQuestion);
               const mdOnly = targetDocs.filter(d => /\.md$/i.test(d.fileName));
-              const chosen = mdOnly.length > 0 ? mdOnly : targetDocs;
+              const baseChosen = mdOnly.length > 0 ? mdOnly : targetDocs;
+              const chosen = needsResumeAttribution
+                ? [...new Map([...baseChosen, ...projects.filter(isResumeDocument)].map(d => [d.id, d])).values()]
+                : baseChosen;
               focus = {
                 documentIds: chosen.map(d => d.id),
-                name: chosen.map(d => d.fileName.replace(/\.[^.]+$/, '')).join(' / '),
+                name: baseChosen.map(d => d.fileName.replace(/\.[^.]+$/, '')).join(' / '),
                 reason: '上下文补全定位目标文档',
                 anchor: effectiveQuestion
               };
@@ -648,17 +712,29 @@ function executeAskQuestion(
       if (controller.signal.aborted || settled) return;
 
       const continuing = focus.reason === '连续追问继承上一题项目' || focus.reason === '上下文补全定位目标文档';
-      const shouldRetrieve = selectedLibraries.length > 0 && !options.images?.length && intent !== 'chatter';
+      const pureGeneralTech = session.strategy !== 'docs_only' &&
+        (intent === 'general_tech' || focus.reason === '通用概念题，不继承项目范围') &&
+        focus.documentIds.length === 0 &&
+        !/你|你们|我|我们|简历|项目|实习/.test(effectiveQuestion) &&
+        !projects.some(p => /真题|题库|考点|八股/.test(p.fileName));
+      const shouldRetrieve = selectedLibraries.length > 0 && !options.images?.length && intent !== 'chatter' && !pureGeneralTech;
       const targetLibraries = shouldRetrieve ? selectedLibraries : [];
 
-      ensureEmbeddingIndex(db, vectorIndex, embedProfile);
       let qVec: number[] | undefined;
       if (embedProfile && targetLibraries.length && vectorIndex.size &&
         indexMatchesProvider(vectorIndex, embedProfile) && keyVault.hasKey(embedProfile.id)) {
         try {
-          const retrievalDeadline = AbortSignal.timeout(Math.min(embedProfile.timeoutMs || 30000, 3000));
-          const vectors = await providerService.generateEmbeddings(embedProfile, [searchQuery], undefined,
-            AbortSignal.any([controller.signal, retrievalDeadline]));
+          const canReusePrefetch = !!(optimisticEmbedPromise && optimisticEmbedQuery && (
+            effectiveQuestion === question ||
+            !focus.name ||
+            focus.name === (previousFocus?.name || '') ||
+            optimisticEmbedQuery.includes(focus.name)
+          ));
+          const candidateVec = canReusePrefetch ? await optimisticEmbedPromise : undefined;
+          const vectors = candidateVec
+            ? [candidateVec]
+            : await providerService.generateEmbeddings(embedProfile, [searchQuery], undefined,
+                AbortSignal.any([controller.signal, AbortSignal.timeout(Math.min(embedProfile.timeoutMs || 30000, 3000))]));
           const current = db.getActiveProfile('embed');
           if (current && embeddingSpaceKey(current) === embeddingSpaceKey(embedProfile) &&
             indexMatchesProvider(vectorIndex, embedProfile) && vectors[0]?.length === vectorIndex.getProfile()?.dimensions) {
@@ -670,7 +746,7 @@ function executeAskQuestion(
         }
       }
       if (controller.signal.aborted || settled) return;
-      const retrieval = await retrievalService.retrieve({query:searchQuery,libraryIds:targetLibraries,topK:8,documentIds:focus.documentIds,
+      const retrieval = await retrievalService.retrieve({query:searchQuery,libraryIds:targetLibraries,topK:8,documentIds:focus.documentIds,intent,
         focusSection:continuing&&!/换个|另一个|其他/.test(effectiveQuestion)?previousFocusTurn?.retrieval?.caseSection:undefined},qVec);
       turn.retrieval={...focus,rewrittenQuestion:effectiveQuestion!==question?effectiveQuestion:undefined,searchQuery,intent,caseSection:retrieval.items.map(i=>caseSection(i.sectionPath)).find(Boolean),omitted:retrieval.omitted||[],items:retrieval.items.map(i=>({chunkId:i.chunkId,fileName:i.fileName,sectionPath:i.sectionPath,chars:i.text.length}))};
       if (controller.signal.aborted || settled) return;
@@ -734,15 +810,28 @@ function executeAskQuestion(
       const rewriteNote = effectiveQuestion !== question ? `\n面试官语音原句：${question}\n上下文补全后语义：${effectiveQuestion}` : '';
       const history=[{role:'system',content:`检索范围判断：${focus.reason}。若只给了平台名且存在多个不同项目，请先用一句话澄清具体项目；跨项目比较时分别说明，禁止拼成一个人的同一次实施。${rewriteNote}\n`+memoryContext(scopedMemory,effectiveQuestion,focus.documentIds,singleFocusName||undefined)+`\n用户填写的项目事实：${session.projectFacts||'未提供'}\n目标职位：${session.jobDescription||'未提供'}\n近期问答（回答草稿用于保持上下文连贯，具体参数严格以参考资料为准）：${JSON.stringify(recentContext(contextTurns,true))}`}];
       turn.timings!.retrievalMs=Date.now()-turn.timings!.startedAt;
+      if (routing) thinking = await routing;
+      if (controller.signal.aborted || settled) return;
+      if (canSetThinking) turn.timings!.thinking = thinking ?? {mode:'fast', source:'fallback'};
+      const decision = turn.timings!.thinking;
+      const reasoningEffort = decision?.mode === 'deep' ? (decision.source === 'manual' ? 'high' : 'low') : undefined;
+      turn.timings!.reasoningEffort = reasoningEffort;
       turn.timings!.modelRequestedAt=Date.now();
       windowManager.broadcast('chat:progress',{turnId,sessionId,timings:turn.timings});
       await providerService.streamChat(chatProfile, effectiveQuestion, retrieval.items.map((item, idx) => ({
         citationIndex: idx + 1, text: item.text, fileName: item.fileName, sectionPath: item.sectionPath
       })), session.strategy, history, {
         onResponse: value=>{Object.assign(turn.timings!,value);windowManager.broadcast('chat:progress',{turnId,sessionId,timings:turn.timings});},
+        onFirstContent: elapsedMs => {
+          if (settled || controller.signal.aborted) return;
+          turn.timings!.firstContentMs = elapsedMs;
+          windowManager.broadcast('chat:progress', {turnId, sessionId, timings: turn.timings});
+        },
         onReset: () => {
           if (settled || controller.signal.aborted) return;
-          turn.answer = ''; turn.timings!.firstTokenMs = undefined;
+          turn.answer = '';
+          turn.timings!.firstTokenMs = undefined;
+          turn.timings!.firstContentMs = undefined;
           windowManager.broadcast('chat:reset', {turnId, sessionId});
         },
         onToken: token => {
@@ -779,7 +868,10 @@ function executeAskQuestion(
           }
 
         }
-      }, session.promptStyle, controller.signal, {...options, language: options.language || session.language || 'C17'});
+      }, session.promptStyle, controller.signal, {
+        ...options, language: options.language || session.language || 'C17',
+        deepThinking: decision?.mode === 'deep', reasoningEffort
+      });
     } catch (error) {
       finishError(error instanceof Error ? error : new Error(String(error)));
     }
@@ -798,7 +890,7 @@ async function handleCaptureAndAsk(mode: 'interactive' | 'fullscreen' = 'interac
   const image = {...captureRes, id: crypto.randomUUID()};
   windowManager.broadcast('screen:preview', {sessionId, image});
   const question = '请解答截图中的题目；若是代码题，先用候选人口吻讲解法思路，再给完整可运行代码，最后简述复杂度。遵循题目约束，不要先复述输入输出和约束清单。';
-  return {question, turnId: submitQuestion(sessionId, question, targetLibraryIds, undefined, {images: [image]})};
+  return {question, turnId: submitQuestion(sessionId, question, targetLibraryIds, undefined, {images:[image], imageOnly:true})};
 }
 
 function registerIpc() {

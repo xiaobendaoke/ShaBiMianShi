@@ -10,7 +10,7 @@ interface Capture {
   controller: AbortController; speaking: Set<AudioSource>; segmentVoiceStart: Map<AudioSource, number>;
   pendingText: string; next: number; pendingVoiceStartedAt: number; pendingVoiceEndedAt: number;
   lastAutoSubmit?: AutoSubmitSnapshot;
-  lastVoice: number; auto: boolean; selfSpeaking: boolean; mode: string; timer: ReturnType<typeof setInterval>; paused: boolean; force: boolean;
+  lastVoice: number; auto: boolean; selfSpeaking: boolean; mode: string; timer: ReturnType<typeof setInterval>; flushDue?: ReturnType<typeof setTimeout>; paused: boolean; force: boolean;
 }
 export class AudioSessionService {
   private capture?: Capture;
@@ -35,7 +35,7 @@ export class AudioSessionService {
         const record: TranscriptRecord = { id: crypto.randomUUID(), sessionId, captureId: id, sequence: c.segments.length, source, text: '', status: 'pending', createdAt: now, audioMs };
         const segment = { record, wav: encodeWav(pcm), ended, eligible: (mode !== 'both' || source === 'system') && !c.selfSpeaking, settled: false, voiceStartedAt, voiceEndedAt:c.lastVoice };
         c.segments.push(segment); this.save(record); this.notify('audio:transcript', record); this.pump(); this.state();
-      }, () => { if (!c.speaking.has(source)) c.segmentVoiceStart.set(source, Date.now()); c.speaking.add(source); c.lastVoice = Date.now(); }, 0.012, {maxChunkMs:4000, minSpeechMs:200, onEnd:()=>{c.speaking.delete(source);c.segmentVoiceStart.delete(source);this.state();}}));
+      }, () => { if (!c.speaking.has(source)) c.segmentVoiceStart.set(source, Date.now()); c.speaking.add(source); c.lastVoice = Date.now(); }, 0.012, {maxChunkMs:4000, minSpeechMs:200, silenceMs:460, onEnd:()=>{c.speaking.delete(source);c.segmentVoiceStart.delete(source);this.state();}}));
     }
     this.capture = c; this.state(); return id;
   }
@@ -62,7 +62,7 @@ export class AudioSessionService {
   }
   stop(owner?: number) {
     const c = this.capture; if (!c || (owner !== undefined && owner !== c.owner)) return;
-    clearInterval(c.timer); c.controller.abort(); this.stopped = true;
+    clearInterval(c.timer); clearTimeout(c.flushDue); c.controller.abort(); this.stopped = true;
     for (const s of c.segments.filter(s => s.record.status === 'pending')) { s.record.status = 'error'; s.record.error = '监听已停止，片段未提交；可手动重新录入'; this.save(s.record); }
     this.capture = undefined; this.failed.clear(); this.notify('audio:state', {sessionId: c.sessionId, captureId: c.id, running: false});
   }
@@ -108,12 +108,27 @@ export class AudioSessionService {
       s.wav = this.failed.has(s.record.id) ? s.wav : new ArrayBuffer(0);
     }
   }
+  private scheduleFlush(c: Capture, waitMs: number) {
+    clearTimeout(c.flushDue);
+    if (this.stopped || this.capture !== c) return;
+    c.flushDue = setTimeout(() => {
+      if (this.capture === c && !this.stopped) this.flush();
+    }, Math.max(5, waitMs));
+  }
   private flush() {
     const c = this.capture;
     this.state();
-    if (!c || this.blocked() || c.next !== c.segments.length || (!c.force && (!c.auto || c.selfSpeaking || c.paused || c.speaking.size || Date.now() - c.lastVoice < 650))) return;
+    if (!c || this.blocked() || c.next !== c.segments.length) return;
+    if (!c.force) {
+      if (!c.auto || c.selfSpeaking || c.paused || c.speaking.size) return;
+      const elapsed = Date.now() - c.lastVoice;
+      const minPauseMs = isDanglingOpener(c.pendingText) ? 1500 : 480;
+      if (elapsed < minPauseMs) {
+        this.scheduleFlush(c, minPauseMs - elapsed + 5);
+        return;
+      }
+    }
     if (!c.pendingText.trim()) {c.force = false; return;}
-    if (!c.force && isDanglingOpener(c.pendingText) && Date.now() - c.lastVoice < 1600) return;
     if (isQuestion(c.pendingText) || (c.force && c.pendingText.trim())) {
       const q = c.pendingText;
       const now = Date.now();

@@ -30,6 +30,8 @@ export interface ChatErrorPayload {
   turnId: string;
   sessionId: string;
   error: string;
+  status?: 'error' | 'cancelled';
+  timings?: TurnRecord['timings'];
 }
 
 const subscribe = (channel: string, cb: (data: any) => void) => {

@@ -3,8 +3,9 @@ import assert from 'node:assert/strict';
 import {KeywordIndex} from '../src/main/indexing/keywordIndex';
 import {VectorIndex} from '../src/main/indexing/vectorIndex';
 import {RetrievalService} from '../src/main/indexing/retrievalService';
-import {resolveProjectFocus,caseSection,answeredCase} from '../src/main/services/projectFocus';
-import {selectedProject} from '../src/main/services/sessionMemory';
+import {resolveProjectFocus,caseSection,answeredCase,isIdentityOrResumeQuery} from '../src/main/services/projectFocus';
+import {selectedProject,recentContext} from '../src/main/services/sessionMemory';
+import {parseCompletionResponse} from '../src/main/services/queryCompletion';
 import {parseMarkdown} from '../src/main/parsers/mdParser';
 import type {ChunkRecord} from '../src/main/types';
 const docs=[{id:'sms',fileName:'8295 车载座舱离线短信分类.md'},{id:'vision',fileName:'RK3588 YOLOv11n.md'},{id:'audio',fileName:'RK3588 语音全链路.md'},{id:'other',fileName:'attention mappo.md'}];
@@ -60,6 +61,68 @@ const nfkcService=new RetrievalService(nfkcIdx,new VectorIndex(),{getDocument:id
 assert.equal((await nfkcService.retrieve({query:'中山大学 心语心言 音频延时',libraryIds:['lib']})).items[0]?.documentId,'resume','Kangxi radicals match standard UTF-8 queries via NFKC');
 assert.equal((await nfkcService.retrieve({query:'8295 短信分类 模型大小',libraryIds:['lib']})).items[0]?.documentId,'d8295','.md project detail document outranks conflicting .pdf resume chunk');
 assert.equal((await nfkcService.retrieve({query:'兵装 BootLoader Procise',libraryIds:['lib']})).items[0]?.documentId,'resume','Resume-exclusive internship experience still ranks #1');
+
+// Regression v1.0.1 (a11040 audit): identity recall, resume mis-lock prevention, prior 99ms scrubbing, multi-project balanced retrieval, general-tech noise guard
+const auditDocs=[
+  {id:'audit_resume',fileName:'测试候选人 _ 嵌入式与端侧推理.pdf',fileType:'pdf' as const},
+  {id:'audit_green',fileName:'青松视觉项目.md',fileType:'md' as const,headings:['青松视觉项目']},
+  {id:'audit_red',fileName:'赤竹日志项目.md',fileType:'md' as const,headings:['赤竹日志项目']}
+];
+assert.ok(isIdentityOrResumeQuery('你是谁？'));
+assert.ok(isIdentityOrResumeQuery('你是谁？你是谁？你是谁？'));
+assert.ok(isIdentityOrResumeQuery('我是什么职业？我的工作方向是什么？'));
+assert.ok(isIdentityOrResumeQuery('我的实际工作是什么？请说一下职位和主要职责。'));
+assert.equal(isIdentityOrResumeQuery('嗯，好的，感谢同学您的自我介绍哈，那我们这边就先请高老师提问。'), false);
+assert.equal(isIdentityOrResumeQuery('那我们现在开始，我先自我介绍一下啊，我是比亚迪电子马洪超，是这次技术面试官。'), false);
+const forcedIdentity=parseCompletionResponse(JSON.stringify({intent:'chatter',rewrittenQuestion:'你是谁？',searchQuery:'你是谁？',targetDocIds:[]}),'你是谁？你是谁？你是谁？',new Set(['audit_resume','audit_green']));
+assert.equal(forcedIdentity.intent,'project_or_resume','Identity question must never be downgraded to chatter');
+assert.match(forcedIdentity.searchQuery,/个人简历/);
+
+// Follow-up containing "推理" must inherit 青松视觉项目 instead of mis-locking onto "测试候选人 _ 嵌入式与端侧推理.pdf"
+const greenFocus=resolveProjectFocus('青松视觉项目单帧推理最终是几毫秒？',auditDocs);
+assert.deepEqual(greenFocus.documentIds,['audit_green']);
+const followInferFocus=resolveProjectFocus('这项目最后单帧推理用了多少毫秒？',auditDocs,greenFocus);
+assert.deepEqual(followInferFocus.documentIds,['audit_green'],'Word 推理 in follow-up must not mis-lock onto resume PDF');
+assert.equal(followInferFocus.reason,'连续追问继承上一题项目');
+
+// Multi-project comparison naming both 青松视觉项目 and 赤竹日志项目 must retain BOTH documents
+const bothFocus=resolveProjectFocus('比较青松视觉项目和赤竹日志项目的用途，各自的项目编号是什么？',auditDocs);
+assert.deepEqual(bothFocus.documentIds.sort(),['audit_green','audit_red'],'Both named non-numeric projects must be retained');
+assert.equal(bothFocus.reason,'跨项目问题，分别使用各项目资料');
+
+const auditIdx=new KeywordIndex();
+const auditVec=new VectorIndex();
+auditIdx.addChunk({id:'audit_resume_1',documentId:'audit_resume',documentVersion:1,libraryId:'audit',ordinal:1,sectionPath:'第 1 页',text:'姓名：测试候选人。求职方向：嵌入式软件与端侧AI部署，熟悉C/C++、Linux驱动接口与UDP传感器采集。',pageStart:1,pageEnd:1,sourceStart:0,sourceEnd:40,tokenEstimate:25,contentHash:'ar1',createdAt:0},['audit'],'测试候选人 _ 嵌入式与端侧推理.pdf');
+auditIdx.addChunk({id:'audit_green_1',documentId:'audit_green',documentVersion:1,libraryId:'audit',ordinal:1,sectionPath:'青松视觉项目 > 一、职责概况',text:'项目编号 GREEN-742，负责单路摄像头图像采集与端侧目标检测。',pageStart:null,pageEnd:null,sourceStart:0,sourceEnd:40,tokenEstimate:25,contentHash:'ag1',createdAt:0},['audit'],'青松视觉项目.md');
+auditIdx.addChunk({id:'audit_green_2',documentId:'audit_green',documentVersion:1,libraryId:'audit',ordinal:2,sectionPath:'青松视觉项目 > 二、部署验收',text:'青松视觉项目单帧推理最终耗时 17ms，线程排队和预处理都没有计入。',pageStart:null,pageEnd:null,sourceStart:0,sourceEnd:40,tokenEstimate:25,contentHash:'ag2',createdAt:0},['audit'],'青松视觉项目.md');
+auditIdx.addChunk({id:'audit_red_1',documentId:'audit_red',documentVersion:1,libraryId:'audit',ordinal:1,sectionPath:'赤竹日志项目 > 一、项目说明',text:'项目编号 RED-319，负责边缘网关掉电保护环形日志落盘与检索。',pageStart:null,pageEnd:null,sourceStart:0,sourceEnd:40,tokenEstimate:25,contentHash:'ard1',createdAt:0},['audit'],'赤竹日志项目.md');
+auditVec.setProfile({profileId:'p',model:'embed',spaceKey:'https://fixture.invalid/v1|embed|3',dimensions:3,createdAt:0});
+auditVec.addVector('audit_resume_1',['audit'],[0.31,0.95,0]);
+auditVec.addVector('audit_green_1',['audit'],[0.25,0,0.97]);
+auditVec.addVector('audit_green_2',['audit'],[0.27,0,0.96]);
+auditVec.addVector('audit_red_1',['audit'],[0.26,0,0.96]);
+const auditService=new RetrievalService(auditIdx,auditVec,{getDocument:id=>auditDocs.find(d=>d.id===id) as any});
+
+const whoAmI=await auditService.retrieve({query:'你是谁？',libraryIds:['audit']},[1,0,0]);
+assert.ok(whoAmI.items.some(i=>i.documentId==='audit_resume'),'Bare "你是谁？" must recall resume chunks despite <0.46 vector similarity and zero literal keyword overlap');
+assert.equal((await auditService.retrieve({query:'你是谁？',libraryIds:['empty_lib']},[1,0,0])).items.length,0,'Empty/isolated library returns 0 resume chunks');
+
+const multiRetrieved=await auditService.retrieve({query:'比较青松视觉项目和赤竹日志项目的用途，各自的项目编号是什么？',libraryIds:['audit'],documentIds:bothFocus.documentIds,topK:2});
+assert.ok(multiRetrieved.items.some(i=>i.text.includes('GREEN-742')),'First named project retrieved');
+assert.ok(multiRetrieved.items.some(i=>i.text.includes('RED-319')),'Second named project retrieved via balanced multi-doc seeding');
+
+const coroutineTech=await auditService.retrieve({query:'协程 线程 区别',libraryIds:['audit'],intent:'general_tech'},[1,0,0]);
+assert.equal(coroutineTech.items.length,0,'General tech question about 协程/线程 must not pull 青松视觉项目 just because it mentions 线程排队');
+const tcpUdpTech=await auditService.retrieve({query:'TCP 和 UDP 有什么区别？',libraryIds:['audit']},[1,0,0]);
+assert.equal(tcpUdpTech.items.length,0,'General tech TCP vs UDP must not pull resume just because it mentions UDP with low vector score');
+
+// Unverified 99ms in prior draft is scrubbed while citation-backed 17ms and non-metric markers stay intact
+const scrubbed=recentContext([
+  {question:'上一题',answer:'青松视觉单帧耗时是**99ms**，另有标记 SECRET_DRAFT_37，真实核实 17ms。',answerPolicyVersion:2,citations:[{snippet:'单帧推理最终耗时 17ms'}]} as any
+]);
+assert.ok(!scrubbed[0].draft!.includes('99ms'),'Unverified 99ms metric must be scrubbed from historical draft');
+assert.ok(scrubbed[0].draft!.includes('17ms'),'Citation-verified 17ms stays intact');
+assert.ok(scrubbed[0].draft!.includes('SECRET_DRAFT_37'),'Non-metric scope tokens stay intact');
 
 console.log('PASS Project aliases, explicit switch, follow-up scope, ambiguity, whole-case evidence, NFKC, .md authority, library boundary and budget diagnostics');
 

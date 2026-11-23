@@ -728,7 +728,13 @@ export class AppDatabase {
         prompt_style = excluded.prompt_style,
         metadata_json = excluded.metadata_json,
         updated_at = excluded.updated_at
-    `).run(s.id, s.title, JSON.stringify(s.libraryIds), s.strategy, s.promptStyle, s.createdAt, s.updatedAt, JSON.stringify({language: s.language || 'C17', summary: s.summary ?? previous.summary, projectFacts: s.projectFacts ?? previous.projectFacts, jobDescription: s.jobDescription ?? previous.jobDescription}));
+    `).run(s.id, s.title, JSON.stringify(s.libraryIds), s.strategy, s.promptStyle, s.createdAt, s.updatedAt, JSON.stringify({
+      language: s.language || 'C17',
+      thinkingMode: s.thinkingMode ?? previous.thinkingMode,
+      summary: s.summary ?? previous.summary,
+      projectFacts: s.projectFacts ?? previous.projectFacts,
+      jobDescription: s.jobDescription ?? previous.jobDescription
+    }));
   }
 
   public deleteSession(id: string) {

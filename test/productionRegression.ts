@@ -84,16 +84,45 @@ async function main() {
   const originalFetch = globalThis.fetch;
   const asrQueue: string[] = [];
   const completionInputs: any[] = [];
+  const routerRequests: {body: any; signal: AbortSignal}[] = [];
+  let routerMode: 'fast' | 'deep' | 'malformed' | 'stall' | 'hold' = 'fast';
+  let releaseRouter: (() => void) | undefined;
+  let completionOverride: ((q: string, docs: any[], combinedRouting: boolean) => any) | undefined;
   globalThis.fetch = (async (url: any, options: any) => {
     if (String(url).endsWith('/audio/transcriptions')) {
       return new Response(JSON.stringify({ text: asrQueue.shift() || '默认测试语音' }), { headers: { 'content-type': 'application/json' } });
     }
     const body = JSON.parse(options.body);
     if(body.messages?.[0]?.content?.includes('整理会话记忆'))return new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({project:'',facts:[],working:[],uncertain:[]})}}]}),{headers:{'content-type':'application/json'}});
+    if (body.messages?.[0]?.content?.includes('难度路由器')) {
+      routerRequests.push({body, signal: options.signal});
+      const routed = (mode: string) => Response.json({choices:[{message:{content:JSON.stringify({mode})}}]});
+      if (routerMode === 'hold') {
+        return new Promise((resolve, reject) => {
+          releaseRouter = () => resolve(routed('deep'));
+          options.signal.addEventListener('abort', () => reject(options.signal.reason), {once:true});
+        });
+      }
+      if (routerMode === 'stall') {
+        return new Response(new ReadableStream({
+          start(stream) {
+            stream.enqueue(new TextEncoder().encode('{"choices":'));
+            options.signal.addEventListener('abort', () => stream.error(options.signal.reason), {once:true});
+          }
+        }));
+      }
+      return routed(routerMode);
+    }
     if(body.messages?.[0]?.content?.includes('语音纠错与上下文指代补全器')){
-      const payload=JSON.parse(body.messages[1].content);
-      completionInputs.push(payload);
-      return new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({intent:'project_or_resume',rewrittenQuestion:payload.currentQuestion.replace('多肽', '多态'),searchQuery:'订单 幂等 唯一业务编号',targetDocIds:payload.documents.filter((d:any)=>d.fileName==='order.md').map((d:any)=>d.id)})},finish_reason:'stop'}]}),{headers:{'content-type':'application/json'}});
+      const [context, currentQuestion] = body.messages[1].content.split('\n当前问题：\n');
+      const source = context.match(/^来源：(audio|typed)/)?.[1];
+      const documents = JSON.parse(context.match(/^文档目录：(.*)$/m)?.[1] ?? '[]');
+      const combinedRouting = body.messages[0].content.includes('"thinkingMode"');
+      completionInputs.push({context, currentQuestion, source, combinedRouting});
+      const payload = completionOverride
+        ? completionOverride(currentQuestion, documents, combinedRouting)
+        : {intent:'project_or_resume',rewrittenQuestion:currentQuestion.replace('多肽', '多态'),searchQuery:'订单 幂等 唯一业务编号',targetDocIds:documents.filter((d:any)=>d.fileName==='order.md').map((d:any)=>d.id),thinkingMode:combinedRouting ? routerMode : undefined};
+      return new Response(JSON.stringify({choices:[{message:{content:JSON.stringify(payload)},finish_reason:'stop'}]}),{headers:{'content-type':'application/json'}});
     }
     const embedding = String(url).endsWith('/embeddings');
     requests.push({ url: String(url), body, authorization: options.headers.Authorization });
@@ -363,6 +392,67 @@ async function main() {
     assert.ok(!JSON.stringify(requests.at(-1).body.messages).includes(privateFact));
     call('chat:delete-session', privateSession.id);
 
+    // v1.0.1 (a11040) full E2E audit fixes: identity resume recall, zero-evidence guard, 99ms draft scrubbing, dual-project recall, general-tech isolation
+    const auditLib = {id:'audit-a11040', name:'复测审计库', description:'', docCount:0, createdAt:Date.now(), updatedAt:Date.now()};
+    call('kb:save-library', auditLib);
+    await importFile('测试候选人 _ 嵌入式与端侧推理.txt', '测试候选人，主要方向为嵌入式软件与端侧AI部署，负责Linux驱动与NPU部署。', auditLib.id);
+    await importFile('青松视觉项目.md', '# 青松视觉项目\n\n项目编号 GREEN-742。单帧推理最终耗时 17ms，线程排队和预处理都没有计入。', auditLib.id);
+    await importFile('赤竹日志项目.md', '# 赤竹日志项目\n\n项目编号 RED-319。负责边缘网关掉电保护环形日志。', auditLib.id);
+    const auditDocsList = call('kb:get-documents', auditLib.id);
+    const resumeDocId = auditDocsList.find((d: any) => d.fileName.includes('测试候选人')).id;
+    const greenDocId = auditDocsList.find((d: any) => d.fileName.includes('青松视觉')).id;
+    const auditSession = {...makeSession('audit-session', '事实可靠性回归'), strategy:'docs_and_general' as const, libraryIds:[auditLib.id]};
+    call('chat:save-session', auditSession);
+
+    // 1) Voice "你是谁？你是谁？你是谁？" misclassified by LLM as chatter still overrides to resume retrieval
+    completionOverride = (_q, _docs, combined) => ({intent:'chatter', rewrittenQuestion:'你是谁？', searchQuery:'你是谁？', targetDocIds:[], thinkingMode:combined ? 'fast' : undefined});
+    await call('chat:ask-question', {sessionId:auditSession.id, question:'你是谁？你是谁？你是谁？', libraryIds:[auditLib.id], turnId:'audit-id-voice', options:{audioTiming:{voiceEndedAt:Date.now()-500, submittedAt:Date.now()}}});
+    await waitFor(() => state.db.getTurns(auditSession.id).find((t: any) => t.id === 'audit-id-voice')?.status === 'completed', 'audit voice identity');
+    assert.ok(state.db.getTurns(auditSession.id).find((t: any) => t.id === 'audit-id-voice').citations.some((c: any) => c.documentId === resumeDocId), 'Voice identity question must retrieve resume despite chatter LLM output');
+
+    // 2) Dual-project question retrieves BOTH 青松视觉项目.md and 赤竹日志项目.md
+    completionOverride = undefined;
+    await call('chat:ask-question', {sessionId:auditSession.id, question:'比较青松视觉项目和赤竹日志项目的用途，各自的项目编号是什么？', libraryIds:[auditLib.id], turnId:'audit-both-typed'});
+    await waitFor(() => state.db.getTurns(auditSession.id).find((t: any) => t.id === 'audit-both-typed')?.status === 'completed', 'audit dual project');
+    const bothCites = state.db.getTurns(auditSession.id).find((t: any) => t.id === 'audit-both-typed').citations;
+    assert.ok(bothCites.some((c: any) => c.fullText.includes('GREEN-742')) && bothCites.some((c: any) => c.fullText.includes('RED-319')), 'Both named projects must be retrieved');
+
+    // 3) Follow-up with prior false 99ms draft neither mis-locks to resume on "推理" nor leaks unverified 99ms into prompt
+    state.db.saveTurn({id:'audit-poison-draft', sessionId:auditSession.id, role:'assistant', status:'completed',
+      question:'介绍一下青松视觉项目', answer:'青松视觉项目最后单帧推理耗时是**99ms**。', answerPolicyVersion:2,
+      retrieval:{documentIds:[greenDocId], contextDocumentIds:[greenDocId], name:'青松视觉项目', reason:'本题项目标识匹配', anchor:'青松视觉项目', omitted:[], items:[]},
+      citations:[], createdAt:Date.now()});
+    completionOverride = (_q, _docs, combined) => ({intent:'project_or_resume', rewrittenQuestion:'青松视觉项目最后单帧推理用了多少毫秒？', searchQuery:'青松视觉项目 单帧推理 毫秒', targetDocIds:[resumeDocId], thinkingMode:combined ? 'fast' : undefined});
+    const beforeFollowReq = requests.length;
+    await call('chat:ask-question', {sessionId:auditSession.id, question:'这项目最后单帧推理用了多少毫秒？', libraryIds:[auditLib.id], turnId:'audit-follow-17ms', options:{audioTiming:{voiceEndedAt:Date.now()-500, submittedAt:Date.now()}}});
+    await waitFor(() => state.db.getTurns(auditSession.id).find((t: any) => t.id === 'audit-follow-17ms')?.status === 'completed', 'audit 17ms follow-up');
+    const followTurn = state.db.getTurns(auditSession.id).find((t: any) => t.id === 'audit-follow-17ms');
+    assert.ok(followTurn.citations.some((c: any) => c.documentId === greenDocId && c.fullText.includes('17ms')), 'Follow-up must hit 青松视觉项目.md (17ms), not resume');
+    const followChatReq = requests.slice(beforeFollowReq).find(r => r.body.stream === true)!;
+    const followSysPrompt = JSON.stringify(followChatReq.body.messages);
+    assert.ok(followSysPrompt.includes('17ms') && !followSysPrompt.includes('99ms'), 'Unverified 99ms draft must be scrubbed while authoritative 17ms is present');
+
+    // 4) General tech question in docs_and_general skips personal project pollution
+    completionOverride = (_q, _docs, combined) => ({intent:'general_tech', rewrittenQuestion:'什么叫协程，和线程有什么区别？', searchQuery:'协程 线程 区别', targetDocIds:[], thinkingMode:combined ? 'fast' : undefined});
+    await call('chat:ask-question', {sessionId:auditSession.id, question:'什么叫携程，和线程有什么区别？', libraryIds:[auditLib.id], turnId:'audit-general-tech', options:{audioTiming:{voiceEndedAt:Date.now()-500, submittedAt:Date.now()}}});
+    await waitFor(() => state.db.getTurns(auditSession.id).find((t: any) => t.id === 'audit-general-tech')?.status === 'completed', 'audit general tech');
+    assert.equal(state.db.getTurns(auditSession.id).find((t: any) => t.id === 'audit-general-tech').citations.length, 0, 'General tech must not pull unrelated project chunks');
+
+    // 5) Zero-evidence docs_only identity query injects strict anti-hallucination directive
+    completionOverride = (_q, _docs, combined) => ({intent:'project_or_resume', rewrittenQuestion:'我是什么职业？我的工作方向是什么？', searchQuery:'职业 工作方向 简历', targetDocIds:[], thinkingMode:combined ? 'fast' : undefined});
+    call('chat:save-session', {...auditSession, strategy:'docs_only', libraryIds:[]});
+    const beforeNoDocReq = requests.length;
+    await call('chat:ask-question', {sessionId:auditSession.id, question:'我是什么职业？我的工作方向是什么？', libraryIds:[], turnId:'audit-no-doc', options:{audioTiming:{voiceEndedAt:Date.now()-500, submittedAt:Date.now()}}});
+    await waitFor(() => state.db.getTurns(auditSession.id).find((t: any) => t.id === 'audit-no-doc')?.status === 'completed', 'audit zero-evidence');
+    const noDocChatReq = requests.slice(beforeNoDocReq).find(r => r.body.stream === true)!;
+    assert.match(JSON.stringify(noDocChatReq.body.messages), /0 条命中.*严禁猜测或编造任何职位方向/);
+
+    completionOverride = undefined;
+    call('chat:delete-session', auditSession.id);
+    for (const d of auditDocsList) call('kb:delete-document', d.id);
+    call('kb:delete-library', auditLib.id);
+    pass('Actual E2E v1.0.1 audit fixes: identity resume recall, dual-project recall, 99ms scrubbing, general-tech isolation and zero-evidence guard');
+
     mode = 'stallEmbedBody'; chatSignal = undefined;
     const stalledSession = await ask('stall-embed-body', '订单项目幂等方案', ['default_lib']);
     await waitFor(() => state.db.getTurns(stalledSession).find((t: any) => t.id === 'stall-embed-body')?.status === 'completed', 'keyword fallback after embedding body timeout');
@@ -421,6 +511,104 @@ async function main() {
     call('kb:delete-document', deleting.id);
     mode = 'normal';
     pass('Deleting a document clears its managed copy and indexes and stays deleted when in-flight indexing completes');
+
+    const thinkingProfile = {...profile, id:'thinking-provider', modelChat:'deepseek-flash'};
+    saveProfile(thinkingProfile);
+    call('api:set-active-role',{role:'chat',profileId:thinkingProfile.id});
+    const thinkingSession = {...makeSession('thinking-router','自动思考测试'), libraryIds:[]};
+    call('chat:save-session',thinkingSession);
+    const findTurn = (id: string) => state.db.getTurns(thinkingSession.id).find((turn: any) => turn.id === id);
+    const sendThinking = (id: string, question: string, options = {}, libraryIds: string[] = []) =>
+      call('chat:ask-question',{sessionId:thinkingSession.id,turnId:id,question,options,libraryIds});
+    const awaitThinking = async (id: string, expectedMode: string, source: string) => {
+      await waitFor(() => findTurn(id)?.status === 'completed', id);
+      const timings = findTurn(id).timings;
+      assert.deepEqual(timings.thinking,{mode:expectedMode,source});
+      const answerRequest = requests.findLast(r => r.body.stream === true);
+      assert.equal(answerRequest.body.thinking.type, expectedMode === 'deep' ? 'enabled' : 'disabled');
+      const effort = expectedMode === 'deep' ? (source === 'manual' ? 'high' : 'low') : undefined;
+      assert.equal(answerRequest.body.reasoning_effort, effort);
+      assert.equal(timings.reasoningEffort, effort);
+      assert.equal(answerRequest.body.messages.filter((message: any) => message.role === 'system').length, 1);
+      assert.ok(timings.firstContentMs >= timings.responseMs);
+      assert.ok(Number.isFinite(timings.firstTokenMs));
+      return answerRequest.body;
+    };
+    routerMode = 'fast';
+    const beforeFast = routerRequests.length;
+    sendThinking('route-fast','TCP 和 UDP 有什么区别？');
+    const quick = await awaitThinking('route-fast','fast','model');
+    assert.equal(routerRequests.length,beforeFast+1);
+    assert.equal(routerRequests.at(-1)!.body.thinking.type,'disabled');
+    assert.equal(routerRequests.at(-1)!.body.stream,false);
+    assert.ok(Number.isFinite(findTurn('route-fast').timings.routingMs));
+
+    routerMode = 'deep';
+    sendThinking('route-deep','如何定位某段代码偶发死锁并兼顾吞吐量？');
+    const deep = await awaitThinking('route-deep','deep','model');
+    assert.ok(deep.max_tokens > quick.max_tokens);
+    assert.match(routerRequests.at(-1)!.body.messages.at(-1).content,/TCP 和 UDP/);
+
+    const beforeAudio = routerRequests.length;
+    const beforeCompletion = completionInputs.length;
+    sendThinking('route-audio','那刚才这个怎么验证？',{audioTiming:{voiceEndedAt:Date.now()-700,submittedAt:Date.now()}});
+    await awaitThinking('route-audio','deep','completion');
+    assert.equal(routerRequests.length,beforeAudio);
+    assert.equal(completionInputs.length,beforeCompletion+1);
+    assert.equal(completionInputs.at(-1).combinedRouting,true);
+    assert.ok(Number.isFinite(findTurn('route-audio').timings.completionMs));
+    pass('DeepSeek automatic thinking uses model classification and reuses the existing voice completion request');
+
+    call('chat:save-session',{...thinkingSession,thinkingMode:'fast'});
+    assert.equal(call('chat:get-sessions').find((s: any)=>s.id===thinkingSession.id).thinkingMode,'fast');
+    sendThinking('route-manual-fast','这是一道需要多步设计的架构题');
+    await awaitThinking('route-manual-fast','fast','manual');
+    sendThinking('route-manual-deep','重新回答原题',{thinkingMode:'deep'});
+    await awaitThinking('route-manual-deep','deep','manual');
+    sendThinking('route-manual-audio','语音里的技术问题',{audioTiming:{voiceEndedAt:Date.now()-700,submittedAt:Date.now()}});
+    await awaitThinking('route-manual-audio','fast','manual');
+    assert.equal(completionInputs.at(-1).combinedRouting,false);
+    assert.equal(routerRequests.length,beforeAudio);
+    call('chat:save-session',{...thinkingSession,thinkingMode:'auto'});
+
+    const images = [{id:'router-image', mimeType:'image/png', base64:'aGVsbG8='}];
+    const beforeExtraction = requests.length;
+    sendThinking('route-extract','提取试题',{action:'extract',images});
+    await awaitThinking('route-extract','fast','action');
+    sendThinking('route-image-only','解答截图中的题目',{images,imageOnly:true});
+    await awaitThinking('route-image-only','deep','action');
+    assert.equal(requests.slice(beforeExtraction).filter(r => r.body.messages?.at(-1)?.content?.[1]?.type === 'image_url').length,2);
+    assert.equal(routerRequests.length,beforeAudio);
+    pass('Manual thinking preferences apply across input paths; screenshot solving and extraction each send the image once');
+
+    routerMode = 'malformed';
+    sendThinking('route-invalid','网关返回未知的分类结果');
+    await awaitThinking('route-invalid','fast','fallback');
+    routerMode = 'stall';
+    sendThinking('route-timeout','分类服务发出响应头但不结束正文');
+    await awaitThinking('route-timeout','fast','fallback');
+    assert.ok(routerRequests.at(-1)!.signal.aborted);
+    assert.ok(findTurn('route-timeout').timings.routingMs >= 1000 && findTurn('route-timeout').timings.routingMs < 3000);
+    const beforeCancelRoute = routerRequests.length;
+    const beforeCancelAnswer = requests.length;
+    sendThinking('route-cancel','等待分类时取消');
+    await waitFor(()=>routerRequests.length===beforeCancelRoute+1,'router request before cancel');
+    call('chat:cancel',{sessionId:thinkingSession.id,turnId:'route-cancel'});
+    assert.equal(routerRequests.at(-1)!.signal.aborted,true);
+    await new Promise(r=>setTimeout(r,15));
+    assert.equal(findTurn('route-cancel').status,'cancelled');
+    assert.equal(requests.length,beforeCancelAnswer);
+    pass('The 1.5 second classification deadline falls back to fast, and cancel aborts routing without sending an answer');
+
+    routerMode = 'hold'; releaseRouter = undefined;
+    mode = 'pauseEmbed'; pendingRelease = undefined;
+    sendThinking('route-parallel','订单项目如何权衡幂等方案',{},['default_lib']);
+    await waitFor(()=>!!releaseRouter && !!pendingRelease,'classification and embedding both start before either completes');
+    mode = 'normal'; pendingRelease!(); releaseRouter!();
+    await awaitThinking('route-parallel','deep','model');
+    call('chat:delete-session',thinkingSession.id);
+    call('api:set-active-role',{role:'chat',profileId:profile.id});
+    pass('Standalone classification and knowledge-base lookup overlap before answer generation');
 
     const bProfile = { ...profile, id: 'service-B', name: 'B', baseUrl: 'https://fixture-b.invalid/v1', createdAt: 2 };
     saveProfile(bProfile); call('api:set-active-role', { role: 'embed', profileId: bProfile.id });

@@ -71,7 +71,6 @@ export const CopilotView: React.FC<CopilotViewProps> = ({ currentSession, librar
 
   const [isCapturing, setIsCapturing] = useState(false);
   const [images, setImages] = useState<ImageAttachment[]>([]);
-  const [deepThinking, setDeepThinking] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [shortcutFailures, setShortcutFailures] = useState<string[]>([]);
   const [preview, setPreview] = useState<ImageAttachment | null>(null);
@@ -182,7 +181,8 @@ export const CopilotView: React.FC<CopilotViewProps> = ({ currentSession, librar
       }
       activeTurnRef.current = null; setIsGenerating(false);
       const status = payload.status === 'cancelled' ? 'cancelled' as const : 'error' as const;
-      const update = (turn: TurnRecord) => turn.id === payload.turnId ? { ...turn, status, error: payload.error } : turn;
+      const update = (turn: TurnRecord) => turn.id === payload.turnId
+        ? { ...turn, status, error: payload.error, timings: payload.timings ?? turn.timings } : turn;
       setTurns(prev => prev.map(update));
       setCurrentTurn(prev => prev ? update(prev) : prev);
       if (status !== 'cancelled') setErrorMessage(`生成失败: ${payload.error}`);
@@ -213,10 +213,18 @@ export const CopilotView: React.FC<CopilotViewProps> = ({ currentSession, librar
   };
 
   const handleSend = async (textToSend?: string, suppliedOptions?: AnswerOptions) => {
-    const q = (textToSend || questionInput || (images.length ? '请解答截图中的题目，给出完整代码。' : '')).trim();
+    const input = (textToSend ?? questionInput).trim();
+    const attachedImages = suppliedOptions ? suppliedOptions.images : images;
+    const q = input || (attachedImages?.length ? '请解答截图中的题目，给出完整代码。' : '');
     if (!q || !currentSession) return;
     const queued = !!activeTurnRef.current;
-    const options: AnswerOptions = suppliedOptions || {images, language: currentSession.language || 'C17', deepThinking};
+    const options: AnswerOptions = {
+      images: attachedImages,
+      imageOnly: !input && !!attachedImages?.length,
+      language: currentSession.language || 'C17',
+      ...suppliedOptions,
+      thinkingMode: suppliedOptions?.thinkingMode ?? currentSession.thinkingMode ?? 'auto'
+    };
     setErrorMessage('');
 
     if (!queued) setIsGenerating(true);
@@ -462,12 +470,18 @@ export const CopilotView: React.FC<CopilotViewProps> = ({ currentSession, librar
         <div ref={answerScrollRef} className="flex-1 overflow-y-auto">
           {currentTurn ? (
             <article key={currentTurn.id} className="max-w-[820px] mx-auto px-6 @min-[680px]:px-10 pt-8 pb-10 animate-fade-up">
-              <div className="flex items-center gap-2 text-[12px] text-label-3">
+              <div className="flex flex-wrap items-center gap-2 text-[12px] text-label-3">
                 <Badge tone={statusTone(currentTurn)}>
                   {currentTurn.status === 'streaming' && <span className="h-1.5 w-1.5 rounded-full bg-current animate-pulse" />}
                   {statusText(currentTurn)}
                 </Badge>
                 <span className="tabular-nums">当前问题 · {new Date(currentTurn.createdAt).toLocaleTimeString()}</span>
+                {currentTurn.timings?.thinking && (
+                  <Badge tone={currentTurn.timings.thinking.mode === 'deep' ? 'accent' : 'neutral'}>
+                    {currentTurn.timings.thinking.mode === 'deep' ? '深入思考' : '快速回答'}
+                    {currentTurn.timings.thinking.source === 'fallback' && '（判断未返回）'}
+                  </Badge>
+                )}
               </div>
               <h1 className="mt-3 text-[32px] @max-[620px]:text-[26px] leading-[1.18] font-bold tracking-[-0.03em] text-label select-text">{currentTurn.topic || currentTurn.question}</h1>
 
@@ -484,16 +498,21 @@ export const CopilotView: React.FC<CopilotViewProps> = ({ currentSession, librar
                       {copied ? <Check size={13} className="text-success" /> : <Copy size={13} />}
                       <span>{copied ? '已复制' : '复制回答'}</span>
                     </button>
-                    <button onClick={() => handleSend(currentTurn.question, currentTurn.options)} className={button.chip}>
+                    <button onClick={() => handleSend(currentTurn.question, {...currentTurn.options, audioTiming:undefined, thinkingMode:currentSession?.thinkingMode ?? 'auto'})} className={button.chip}>
                       <RotateCcw size={13} />
                       <span>重新回答</span>
                     </button>
+                    {currentTurn.timings?.thinking?.mode === 'fast' && (
+                      <button onClick={() => handleSend(currentTurn.question, {...currentTurn.options, audioTiming:undefined, thinkingMode:'deep'})} className={button.chip}>
+                        <Brain size={13} />深入重答
+                      </button>
+                    )}
                   </>
                 )}
                 <span className="mx-1 h-4 w-px bg-separator" />
                 <button className={button.chip} disabled={isGenerating} onClick={()=>void handleSend(`请将下面的回答压缩成一句话。问题：${currentTurn.question}。回答：${currentTurn.answer}`, {action:'shorten'})}>再短一点</button>
                 <button className={button.chip} disabled={isGenerating} onClick={()=>void handleSend(`请展开解释这道题。问题：${currentTurn.question}。已有回答：${currentTurn.answer}`, {action:'explain'})}>展开解释</button>
-                <button className={button.chip} disabled={isGenerating} onClick={()=>void handleSend(questionInput || '请结合上一版代码和本次截图或报错调试，给出完整修正版。', {action:'debug', images:images.length?images:currentTurn.options?.images, language:currentSession?.language || 'C17', deepThinking})}>调试提交</button>
+                <button className={button.chip} disabled={isGenerating} onClick={()=>void handleSend(questionInput.trim() || '请结合上一版代码和本次截图或报错调试，给出完整修正版。', {action:'debug', images:images.length?images:currentTurn.options?.images, imageOnly:!questionInput.trim()})}>调试提交</button>
                 <button className={button.chip} disabled={!images.length || isGenerating} onClick={()=>void handleSend('只提取图片中的完整题目。', {action:'extract', images})}>只提取题目</button>
                 <button className={button.chip} onClick={()=>void (window as any).api.clearAttachments(currentSession?.id).then(()=>{setPreview(null);setImages([]);return (window as any).api.getTurns(currentSession?.id);}).then(setTurns).catch((e:any)=>setErrorMessage(e.message))}>清理本场截图</button>
               </div>
@@ -503,7 +522,7 @@ export const CopilotView: React.FC<CopilotViewProps> = ({ currentSession, librar
                 <div className="mt-4 space-y-1.5 text-[12px] text-label-2">
                   {!!currentTurn.options?.images?.length && <details className="group"><summary className="inline-flex items-center gap-1 hover:text-label"><ChevronRight size={12} className="transition-transform group-open:rotate-90" />本题截图（{currentTurn.options.images.length}张） · 语言按题目要求优先，否则 {currentTurn.options.language || currentSession?.language || 'C17'}</summary><div className="mt-2 flex gap-2 overflow-x-auto">{currentTurn.options.images.map(image=><img key={image.id} className="max-h-48 rounded-lg border border-separator" src={`data:${image.mimeType};base64,${image.base64}`} alt="本题截图"/>)}</div></details>}
                   {currentTurn.retrieval&&<details className="group"><summary className="inline-flex items-center gap-1 hover:text-label"><ChevronRight size={12} className="transition-transform group-open:rotate-90" />检索依据 · {currentTurn.retrieval.name||'未限定项目'} · {currentTurn.retrieval.items.length}段</summary><div className="mt-2 rounded-lg bg-surface p-3 space-y-1.5"><p>{currentTurn.retrieval.reason}</p><ul className="list-disc pl-4 space-y-0.5">{currentTurn.retrieval.items.map(item=><li key={item.chunkId}>{item.fileName} / {item.sectionPath}（{item.chars}字）</li>)}</ul>{currentTurn.retrieval.omitted.map((text,i)=><p className="text-warning" key={i}>{text}</p>)}</div></details>}
-                  {currentTurn.timings && <p className="text-[11px] text-label-3 tabular-nums">首字 {currentTurn.timings.firstTokenMs ?? '等待'}ms · 总耗时 {currentTurn.timings.totalMs ?? '进行中'}ms · 排队 {currentTurn.timings.queuedMs ?? 0}ms{currentTurn.timings.speechToSubmitMs !== undefined && <> · 说完至提交 {currentTurn.timings.speechToSubmitMs}ms</>}{currentTurn.timings.retrievalMs !== undefined && <> · 上下文准备 {currentTurn.timings.retrievalMs}ms</>}{currentTurn.timings.responseMs !== undefined && <> · 接口响应头 {currentTurn.timings.responseMs}ms · {currentTurn.timings.streaming?'流式返回':'整段返回'} · 请求{currentTurn.timings.attempts}次</>}{currentTurn.timings.speechToFirstTokenMs !== undefined && <> · 说完至首字 {currentTurn.timings.speechToFirstTokenMs}ms</>}</p>}
+                  {currentTurn.timings && <p className="text-[11px] text-label-3 tabular-nums">首字 {currentTurn.timings.firstTokenMs !== undefined ? `${currentTurn.timings.firstTokenMs}ms` : currentTurn.timings.totalMs !== undefined ? '未显示' : '等待'} · 总耗时 {currentTurn.timings.totalMs !== undefined ? `${currentTurn.timings.totalMs}ms` : '进行中'} · 排队 {currentTurn.timings.queuedMs ?? 0}ms{currentTurn.timings.speechToSubmitMs !== undefined && <> · 说完至提交 {currentTurn.timings.speechToSubmitMs}ms</>}{currentTurn.timings.retrievalMs !== undefined && <> · 上下文准备 {currentTurn.timings.retrievalMs}ms</>}{currentTurn.timings.routingMs !== undefined && <> · 难度判断 {currentTurn.timings.routingMs}ms</>}{currentTurn.timings.thinking?.source === 'completion' && <> · 补全并判断难度 {currentTurn.timings.completionMs}ms</>}{currentTurn.timings.responseMs !== undefined && <> · 接口响应头 {currentTurn.timings.responseMs}ms · {currentTurn.timings.streaming?'流式返回':'整段返回'} · 请求{currentTurn.timings.attempts}次</>}{currentTurn.timings.firstContentMs !== undefined && <> · 接口首段正文 {currentTurn.timings.firstContentMs}ms</>}{currentTurn.timings.speechToFirstTokenMs !== undefined && <> · 说完至首字 {currentTurn.timings.speechToFirstTokenMs}ms</>}</p>}
                 </div>
               )}
 
@@ -635,10 +654,17 @@ export const CopilotView: React.FC<CopilotViewProps> = ({ currentSession, librar
                     <option key={lang} value={lang}>{lang}</option>
                   ))}
                 </select>
-                <button onClick={() => setDeepThinking(!deepThinking)} aria-pressed={deepThinking} className={cx(button.plain, 'h-7 px-2 text-[12px]', deepThinking && 'bg-accent-soft text-accent-text hover:bg-accent-soft hover:text-accent-text')} title="深入解题：依赖服务商及模型支持">
-                  <Brain size={14} strokeWidth={1.75} />
-                  <span className="@max-[520px]:hidden">深入解题</span>
-                </button>
+                <select
+                  aria-label="思考模式"
+                  value={currentSession?.thinkingMode ?? 'auto'}
+                  onChange={e => saveSessionFields({thinkingMode:e.target.value as SessionRecord['thinkingMode']})}
+                  className={cx(selectField, 'h-7 px-2 text-[12px]')}
+                  title="思考模式适用于支持思考开关的 DeepSeek 模型"
+                >
+                  <option value="auto">自动思考</option>
+                  <option value="fast">快速回答</option>
+                  <option value="deep">深入思考</option>
+                </select>
 
                 <div className="flex-1" />
                 {isGenerating ? (

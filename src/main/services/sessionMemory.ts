@@ -47,10 +47,31 @@ export function memoryContext(memory:SessionMemory,question:string,documentIds?:
     if(e.source.type==='document'&&documentIds?.length)return documentIds.some(id=>e.source.id.startsWith(id+'_c'));
     return !project||e.project===project||e.project==='未归类'||(keys.length>0&&keys.every(k=>projectAliases(e.project).includes(k)));
   });
-  const corrected=relevant.filter(e=>e.confirmed&&e.source.type==='user').sort((a,b)=>b.updatedAt-a.updatedAt);
-  return `当前项目：${project||'按本题及资料判断，禁止混用不同项目或故障'}\n用户确认/纠正（优先于旧文档）：${JSON.stringify(corrected).slice(0,7000)}\n项目来源事实：${JSON.stringify(relevant.filter(e=>e.kind==='fact'&&e.source.type==='document')).slice(0,10000)}\n会话进展与未确认推测（不是个人事实证据）：${JSON.stringify(relevant.filter(e=>e.kind!=='fact')).slice(0,4000)}`;
+  const corrected=relevant.filter(e=>e.confirmed&&e.source.type==='user').sort((a,b)=>b.updatedAt-a.updatedAt).map(e=>({project:e.project,text:e.text}));
+  const docFacts=relevant.filter(e=>e.kind==='fact'&&e.source.type==='document').slice(-24).map(e=>({project:e.project,topic:e.topic||undefined,text:e.text}));
+  const workingNotes=relevant.filter(e=>e.kind!=='fact').slice(-12).map(e=>({project:e.project,kind:e.kind,text:e.text}));
+  return `当前项目：${project||'按本题及资料判断，禁止混用不同项目或故障'}\n用户确认/纠正（优先于旧文档）：${JSON.stringify(corrected).slice(0,5000)}\n项目来源事实：${JSON.stringify(docFacts).slice(0,5000)}\n会话进展与未确认推测（不是个人事实证据）：${JSON.stringify(workingNotes).slice(0,2500)}`;
 }
+const DRAFT_METRIC_PATTERN = /(?:\*\*)?\d+(?:\.\d+)?(?:\*\*)?\s*(?:(?:ms|us|ns|s|fps|kb|mb|gb|tb|tops|khz|mhz|ghz|mw|w)\b|毫秒|微秒|秒|%|帧|倍|个百分点)/gi;
+
+export function scrubUnverifiedDraftMetrics(answer: string, turn: TurnRecord): string {
+  const verifiedCorpus = (turn.citations || [])
+    .map(c => `${c.fullText || ''} ${c.snippet || ''}`)
+    .join(' ')
+    .normalize('NFKC')
+    .toLowerCase();
+  return answer.replace(DRAFT_METRIC_PATTERN, match => {
+    const num = match.match(/\d+(?:\.\d+)?/)?.[0];
+    if (num && verifiedCorpus.includes(num)) return match;
+    return '[未核实指标已隐去]';
+  });
+}
+
 export function recentContext(turns:TurnRecord[],includeDrafts=true) {
-  return turns.slice(-4).map(t=>({question:t.question.slice(0,2500),draft:includeDrafts&&t.answerPolicyVersion===2?t.answer.slice(0,1600):undefined,warning:t.answerPolicyVersion===2?'历史草稿仅用于理解对话衔接，具体指标以参考资料为准':'旧版回答已隔离，不继承其格式或未经确认的细节'}));
+  return turns.slice(-4).map(t=>({
+    question:t.question.slice(0,2500),
+    draft:includeDrafts&&t.answerPolicyVersion===2?scrubUnverifiedDraftMetrics(t.answer.slice(0,1600),t):undefined,
+    warning:t.answerPolicyVersion===2?'历史草稿仅用于理解对话衔接，任何具体指标严格以本轮参考资料为准':'旧版回答已隔离，不继承其格式或未经确认的细节'
+  }));
 }
 export function isUserCorrection(text:string) {return /^(更正|纠正|修正|补充事实|实际上|我用的是|我负责的是)/.test(text.trim());}

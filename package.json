@@ -1,7 +1,7 @@
 {
   "name": "interviewdog-independent",
   "productName": "傻逼面试",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "type": "module",
   "description": "免登录、独立 API、多文档知识库桌面面试助手（支持 Windows / macOS）",
   "main": "dist/main/index.js",

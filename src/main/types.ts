@@ -87,6 +87,7 @@ export interface RetrievalQuery {
   documentIds?: string[];
   focusSection?: string;
   maxContextChars?: number;
+  intent?: 'project_or_resume' | 'general_tech' | 'chatter';
 }
 
 export interface RetrievalResultItem {
@@ -116,6 +117,12 @@ export interface RetrievalResult {
 export type AnsweringStrategy = 'experience_first' | 'docs_and_general' | 'docs_only';
 
 export type PromptStyle = 'standard' | 'concise' | 'detailed' | 'algorithm' | 'system_design';
+export type ThinkingMode = 'auto' | 'fast' | 'deep';
+export type ResolvedThinkingMode = Exclude<ThinkingMode, 'auto'>;
+export interface ThinkingDecision {
+  mode: ResolvedThinkingMode;
+  source: 'manual' | 'model' | 'completion' | 'action' | 'fallback';
+}
 
 export interface SessionRecord {
   id: string;
@@ -123,6 +130,7 @@ export interface SessionRecord {
   libraryIds: string[];
   strategy: AnsweringStrategy;
   promptStyle: PromptStyle;
+  thinkingMode?: ThinkingMode;
   language?: string;
   summary?: string;
   projectFacts?: string;
@@ -144,7 +152,8 @@ export interface TurnRecord {
   retrieval?: {documentIds:string[];contextDocumentIds?:string[];name:string;reason:string;anchor:string;caseSection?:string;rewrittenQuestion?:string;searchQuery?:string;intent?:string;omitted:string[];items:{fileName:string;sectionPath:string;chunkId:string;chars:number}[]};
   error?: string;
   timings?: {startedAt: number; firstTokenMs?: number; totalMs?: number; queuedMs?: number;
-    completionMs?: number; retrievalMs?: number; modelRequestedAt?: number; responseMs?: number; streaming?: boolean; attempts?: number;
+    completionMs?: number; retrievalMs?: number; modelRequestedAt?: number; responseMs?: number; firstContentMs?: number; streaming?: boolean; attempts?: number;
+    thinking?: ThinkingDecision; routingMs?: number; reasoningEffort?: 'low' | 'high';
     speechToSubmitMs?: number; speechToFirstTokenMs?: number};
   citations: CitationSnapshot[];
   hallucinatedNumbers?: number[];
@@ -171,9 +180,11 @@ export interface CitationSnapshot {
 export interface ImageAttachment { id: string; base64: string; mimeType: string; width?: number; height?: number; }
 export interface AnswerOptions {
   images?: ImageAttachment[];
+  imageOnly?: boolean;
   language?: string;
   action?: 'answer' | 'shorten' | 'explain' | 'debug' | 'extract';
   deepThinking?: boolean;
+  thinkingMode?: ThinkingMode;
   audioTiming?: {voiceEndedAt: number; submittedAt: number};
 }
 export type AudioSource = 'system' | 'microphone';

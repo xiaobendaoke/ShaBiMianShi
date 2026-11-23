@@ -4,8 +4,9 @@ import {ProviderService} from '../src/main/services/providerService';
 import {CaptureCoordinator} from '../src/main/services/captureCoordinator';
 import {AudioSessionService} from '../src/main/services/audioSession';
 import {SpeechSegmenter, encodeWav} from '../src/shared/audio';
-import {answerPolicy, mergeTranscript, isQuestion, isFiller, shouldMergeContinuation} from '../src/shared/interview';
+import {answerPolicy, mergeTranscript, isQuestion, isFiller, shouldMergeContinuation, isNoCodeImageRequest} from '../src/shared/interview';
 import {preCorrectAsrText} from '../src/main/services/queryCompletion';
+import {explicitThinkingDecision} from '../src/main/services/thinkingRoute';
 import type {ProviderProfile, TranscriptRecord} from '../src/main/types';
 let tests = 0;
 async function test(name: string, run: () => unknown) {await run();tests++;console.log(`PASS ${name}`);}
@@ -40,6 +41,64 @@ await test('图片一次请求、普通题短答、四轮历史不二次裁剪',
     await service.streamChat(profile,'截图解题',[],'docs_and_general',history,{onToken:()=>{},onComplete:s=>answer=s,onError:e=>error=e},'concise',undefined,{images:[{id:'i',mimeType:'image/png',base64:'abc'}],language:'C17'});
     assert.equal(error,undefined);assert.ok(answer.includes('```c'));assert.equal(calls,1);assert.equal(body.messages.length,10);assert.equal(body.messages.at(-1).content[1].type,'image_url');assert.equal(body.thinking.type,'disabled');assert.equal(body.max_tokens,8192);
   } finally {globalThis.fetch=saved;}
+});
+await test('回答正文超时忽略角色、心跳、思考与空白片段；有正文时分阶段计时', async () => {
+  const original = globalThis.fetch;
+  const service = new ProviderService({getKey: () => 'fixture'} as any);
+  const profile = {id:'fixture', modelChat:'deepseek-flash', baseUrl:'https://fixture.invalid/v1', timeoutMs:30000} as ProviderProfile;
+  const encodeEvent = (data: unknown) => new TextEncoder().encode(`data: ${JSON.stringify(data)}\n\n`);
+  let aborted = false;
+  let body: any;
+  let finish = false;
+  globalThis.fetch = async (_url, init) => {
+    body = JSON.parse(String(init?.body));
+    return new Response(new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(': ping\n\n'));
+        for (const delta of [{role:'assistant'}, {reasoning_content:'内部思考'}, {content:' '}]) {
+          controller.enqueue(encodeEvent({choices:[{delta}]}));
+        }
+        if (finish) {
+          controller.enqueue(encodeEvent({choices:[{delta:{content:'正常的完整回答。'},finish_reason:'stop'}]}));
+          controller.close();
+          return;
+        }
+        init?.signal?.addEventListener('abort', () => {
+          aborted = true;
+          controller.error(init.signal!.reason);
+        }, {once:true});
+      }
+    }), {headers:{'content-type':'text/event-stream'}});
+  };
+  try {
+    const phases: string[] = [];
+    let error: Error | undefined;
+    const callbacks = {
+      onResponse: () => phases.push('headers'),
+      onFirstContent: () => phases.push('content'),
+      onToken: () => phases.push('visible'),
+      onComplete: () => phases.push('complete'),
+      onError: (value: Error) => { error = value; }
+    };
+    const startedAt = Date.now();
+    await service.streamChat(profile, '什么是索引', [], 'docs_and_general', [], callbacks);
+    assert.ok(aborted);
+    assert.match(error!.message, /4 秒内未返回回答正文/);
+    assert.ok(Date.now() - startedAt < 8000);
+    assert.deepEqual(phases, ['headers']);
+    assert.equal(body.reasoning_effort, undefined);
+
+    finish = true;
+    phases.length = 0;
+    error = undefined;
+    const history = [{role:'system',content:'保留会话范围'}, {role:'user',content:'上一题'}, {role:'assistant',content:'上一答'}];
+    await service.streamChat(profile, '如何设计索引', [], 'docs_and_general', history, callbacks, 'standard', undefined, {deepThinking:true, reasoningEffort:'low'});
+    assert.equal(error, undefined);
+    assert.deepEqual(phases, ['headers', 'content', 'visible', 'complete']);
+    assert.equal(body.reasoning_effort, 'low');
+    assert.match(body.messages[0].content, /保留会话范围/);
+    assert.deepEqual(body.messages.slice(1, -1), history.slice(1));
+  } finally {globalThis.fetch = original;}
 });
 await test('能力测试核验向量正文、图片识别码和独立计算结果', async () => {
   const original = globalThis.fetch;
@@ -119,9 +178,49 @@ await test('候选人口吻、题型预算、代码独立预算、去重与应�
   assert.equal(answerPolicy('什么是索引','standard').maxTokens,512);
   assert.ok(answerPolicy('你的项目做了什么','standard').project);
   assert.equal(answerPolicy('请解题','concise',{images:[{id:'x',base64:'x',mimeType:'image/png'}]}).maxTokens,8192);
+  const calcImgQ = '请解答图片里 f(3) 的值，给出计算过程和最后结果。不要编写新的程序。';
+  assert.equal(isNoCodeImageRequest(calcImgQ), true);
+  const calcPolicy = answerPolicy(calcImgQ, 'standard', {images:[{id:'x',base64:'x',mimeType:'image/png'}]});
+  assert.equal(calcPolicy.coding, false, 'Value-only screenshot calculation must not activate C17 coding template');
+  assert.match(calcPolicy.prompt, /严禁输出任何代码块/);
+  assert.deepEqual(explicitThinkingDecision('auto', {images:[{id:'x',base64:'x',mimeType:'image/png'}]}, calcImgQ), {mode:'fast', source:'action'});
   assert.ok(!answerPolicy('什么是事务','standard').prompt.includes('STAR'));
   assert.equal(mergeTranscript('数据库索引为什么','索引为什么能加快查询'),'数据库索引为什么能加快查询');
   assert.equal(isQuestion('嗯，好的，谢谢。'),false);
+});
+await test('无证据防编造系统护栏与首字5字符快速上屏', async () => {
+  const saved = globalThis.fetch;
+  const bodies: any[] = [];
+  const tokenAtChunk: number[] = [];
+  let chunkIdx = 0;
+  globalThis.fetch = async (_url, init) => {
+    bodies.push(JSON.parse(String(init?.body)));
+    const chunks = ['目前', '资料', '中没有', '记录具体职业方向。'];
+    return new Response(new ReadableStream({
+      start(c) {
+        for (const piece of chunks) {
+          chunkIdx++;
+          c.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({choices:[{delta:{content:piece}}]})}\n\n`));
+        }
+        c.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({choices:[{delta:{},finish_reason:'stop'}]})}\n\ndata: [DONE]\n\n`));
+        c.close();
+      }
+    }), {headers:{'content-type':'text/event-stream'}});
+  };
+  try {
+    const svc = new ProviderService({getKey: () => 'k'} as any);
+    const prof = {id:'p', modelChat:'deepseek-flash', baseUrl:'https://fixture.invalid/v1', timeoutMs:2000} as ProviderProfile;
+    await svc.streamChat(prof, '我是什么职业？我的工作方向是什么？', [], 'docs_only', [{role:'system',content:'用户填写的项目事实：未提供'}], {
+      onToken: () => tokenAtChunk.push(chunkIdx),
+      onComplete: () => {},
+      onError: e => { throw e; }
+    });
+    assert.match(bodies[0].messages[0].content, /0 条命中/);
+    assert.match(bodies[0].messages[0].content, /严禁猜测或编造任何职位方向/);
+    assert.ok(tokenAtChunk.length >= 2, 'First token should flush well before waiting for 16 chars');
+  } finally {
+    globalThis.fetch = saved;
+  }
 });
 await test('PCM独立WAV头、600ms静音、6秒切段和30分钟音频模拟',()=>{
   const output:{samples:Float32Array;ended:boolean}[]=[];
@@ -201,6 +300,12 @@ await test('外语幻觉过滤、领域同音词纠偏、检索前LLM上下文�
   for(const noise of ['हाँ','सही बात है।','ओके','うん','はい'])assert.ok(isFiller(noise),`Foreign noise ${noise} should be ignored`);
   assert.equal(preCorrectAsrText('你们用 circle light 和 We sell two 不输在单次，高通二九五样品研试多少'), '你们用 SQLite 和 V4L2 部署在端侧，高通8295音频延时多少');
   assert.equal(preCorrectAsrText('C++血汗说怎么实现多肽'), 'C++虚函数怎么实现多态');
+  assert.equal(preCorrectAsrText('你在深南实习时用 C加加 和 J J N I 调 Cotlin，对比金伟达做口自我介绍'), '你在深蓝实习时用 C++ 和 JNI 调 Kotlin，对比英伟达做个自我介绍');
+  assert.equal(preCorrectAsrText('你是谁？你是谁？你是谁？'), '你是谁？');
+  assert.ok(isFiller('感谢同学您的自我介绍哈，那我们这边就先请高老师提问。'));
+  assert.ok(shouldMergeContinuation('嗯，具体到你这个场景里面，它是。', '什么东西的比例？', 900));
+  assert.ok(shouldMergeContinuation('你也知道，你面试这个岗位是大模型相关的一个岗位，但是。', '你这个里边大模型相关内容并不多。', 1200));
+  assert.ok(shouldMergeContinuation('就是用C++的多态的特性去实现一个数据的求和。', '针对int类型、float类型以及double类型。', 2200));
 
   const savedFetch=globalThis.fetch;
   globalThis.fetch=async()=>new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({intent:'project_or_resume',rewrittenQuestion:'RK3588全链路语音项目的端到端首字延迟是怎么优化到320ms的？',searchQuery:'RK3588 语音 全链路 首字延迟 TTFT 320ms 优化',targetDocIds:['daudio']})},finish_reason:'stop'}]}),{headers:{'content-type':'application/json'}});

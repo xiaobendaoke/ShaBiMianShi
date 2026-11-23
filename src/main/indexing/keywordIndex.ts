@@ -3,14 +3,18 @@ import { ChunkRecord } from '../types';
 export interface KeywordSearchResult {
   chunkId: string;
   score: number;
+  matchedTerms?: number;
+  queryTerms?: number;
 }
 
 const QUERY_STOPWORDS = new Set([
-  '什么', '什么是', '怎么', '如何', '为什么', '为啥', '请问', '一下', '介绍',
-  '说说', '讲讲', '谈谈', '你们', '你的', '这个', '那个', '刚才', '当时',
+  '什么', '什么是', '什么叫', '叫', '怎么', '如何', '为什么', '为啥', '请问', '一下', '介绍',
+  '说说', '讲讲', '谈谈', '你们', '你的', '这个', '那个', '刚才', '当时', '区别', '对比', '不同', '差异', '意思', '定义',
   '可以', '能不能', '是不是', '多少', '哪些', '哪里', '是', '的', '了', '吗', '呢', '吧', '在', '和', '有'
 ]);
 
+const SINGLE_CHAR_CONNECTORS = new Set('的了和与及在对把被从向给用按由为是有无吗呢吧啊呀哦着过不也没都很更最再又还就才只'.split(''));
+const SINGLE_CHAR_TECH_NOUNS = new Set('锁栈堆表树图流池队列帧核端库页块键簇桶源槽位'.split(''));
 export class KeywordIndex {
   private segmenter: Intl.Segmenter;
   // term -> Map<chunkId, termFrequency>
@@ -32,19 +36,55 @@ export class KeywordIndex {
     const normalized = text.normalize('NFKC');
     const segments = this.segmenter.segment(normalized);
 
-    for (const seg of segments) {
-      const term = seg.segment.trim().toLowerCase();
-      // Exclude punctuation, symbols, and single whitespaces
-      if (term.length > 0 && !/^[\p{P}\p{S}\s]+$/u.test(term)) {
-        tokens.push(term);
-        // Add sliding bi-grams for CJK compound words (3..8 chars) during indexing for sub-word recall
-        if (includeBigrams && /^[\u4e00-\u9fa5]+$/.test(term) && term.length >= 3 && term.length <= 8) {
-          for (let i = 0; i < term.length - 1; i++) {
-            tokens.push(term.slice(i, i + 2));
+    const flushRun = (run: string) => {
+      if (!run) return;
+      tokens.push(run);
+      if (includeBigrams) {
+        if (run.length >= 3 && run.length <= 8) {
+          for (let i = 0; i < run.length - 1; i++) {
+            tokens.push(run.slice(i, i + 2));
           }
+        }
+        if (run.length >= 2) {
+          const tail = run[run.length - 1];
+          if (SINGLE_CHAR_TECH_NOUNS.has(tail)) tokens.push(tail);
+        }
+      }
+    };
+
+    let cjkRun = '';
+    for (const seg of segments) {
+      const raw = seg.segment;
+      if (/^\s+$/.test(raw) || /^[\p{P}\p{S}]+$/u.test(raw)) {
+        flushRun(cjkRun);
+        cjkRun = '';
+        continue;
+      }
+      const term = raw.trim().toLowerCase();
+      if (!term) continue;
+
+      if (/^[\u4e00-\u9fa5]$/.test(term)) {
+        if (SINGLE_CHAR_CONNECTORS.has(term)) {
+          flushRun(cjkRun);
+          cjkRun = '';
+          tokens.push(term);
+        } else {
+          cjkRun += term;
+        }
+        continue;
+      }
+
+      flushRun(cjkRun);
+      cjkRun = '';
+      tokens.push(term);
+      // Add sliding bi-grams for CJK compound words (3..8 chars) during indexing for sub-word recall
+      if (includeBigrams && /^[\u4e00-\u9fa5]+$/.test(term) && term.length >= 3 && term.length <= 8) {
+        for (let i = 0; i < term.length - 1; i++) {
+          tokens.push(term.slice(i, i + 2));
         }
       }
     }
+    flushRun(cjkRun);
     return tokens;
   }
 
@@ -137,6 +177,7 @@ export class KeywordIndex {
 
     const baseQueryTokens = this.tokenize(query, false);
     if (baseQueryTokens.length === 0 || this.chunks.size === 0) return [];
+    const baseSubstantive = [...new Set(baseQueryTokens.filter(t => !QUERY_STOPWORDS.has(t)))];
     const expandedTokens: string[] = [];
     for (const t of baseQueryTokens) {
       if (this.invertedIndex.has(t)) {
@@ -151,13 +192,14 @@ export class KeywordIndex {
     const rawQueryTokens = expandedTokens.length > 0 ? [...new Set(expandedTokens)] : baseQueryTokens;
     const substantive = rawQueryTokens.filter(t => !QUERY_STOPWORDS.has(t));
     const queryTokens = substantive.length > 0 ? substantive : rawQueryTokens;
+    const totalQueryTerms = Math.max(baseSubstantive.length, queryTokens.length);
 
     const N = this.chunks.size;
     const avgdl = this.totalLength / (N || 1);
     const k1 = 1.5;
     const b = 0.75;
 
-    const scores = new Map<string, number>();
+    const entries = new Map<string, { score: number; hits: number }>();
     const allowedLibs = allowedLibraryIds && allowedLibraryIds.length > 0 ? new Set(allowedLibraryIds) : null;
 
     for (const term of queryTokens) {
@@ -186,16 +228,23 @@ export class KeywordIndex {
         }
 
         const docLen = this.docLengths.get(chunkId) || 1;
-        const tf = (freq * (k1 + 1)) / (freq + k1 * (1 - b + b * (docLen / avgdl)));
+        const normRatio = Math.max(0.75, docLen / avgdl);
+        const tf = (freq * (k1 + 1)) / (freq + k1 * (1 - b + b * normRatio));
         const termScore = idf * tf;
 
-        scores.set(chunkId, (scores.get(chunkId) || 0) + termScore);
+        const existing = entries.get(chunkId);
+        if (existing) {
+          existing.score += termScore;
+          existing.hits += 1;
+        } else {
+          entries.set(chunkId, { score: termScore, hits: 1 });
+        }
       }
     }
 
     const results: KeywordSearchResult[] = [];
-    for (const [chunkId, score] of scores.entries()) {
-      results.push({ chunkId, score });
+    for (const [chunkId, val] of entries.entries()) {
+      results.push({ chunkId, score: val.score, matchedTerms: val.hits, queryTerms: totalQueryTerms });
     }
 
     // Sort descending by score

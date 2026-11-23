@@ -12,7 +12,7 @@ export class SpeechSegmenter {
   private voiced = 0;
   speaking = false;
   constructor(private emit: (pcm: Float32Array, ended: boolean) => void, private voice: () => void, private threshold = 0.012,
-    private options: {maxChunkMs?: number; minSpeechMs?: number; onEnd?: () => void} = {}) {}
+    private options: {maxChunkMs?: number; minSpeechMs?: number; silenceMs?: number; onEnd?: () => void} = {}) {}
   push(frame: Float32Array) {
     let sum = 0; for (const x of frame) sum += x * x;
     const active = Math.sqrt(sum / Math.max(1, frame.length)) >= this.threshold;
@@ -24,7 +24,8 @@ export class SpeechSegmenter {
     if (!this.speaking) { this.pre.push(...frame); this.pre = this.pre.slice(-4800); return; }
     this.samples.push(...frame);
     if (!active) this.silence += frame.length;
-    if (this.silence >= 9600) { this.finish(); return; }
+    const silenceSamples = Math.round((this.options.silenceMs ?? 600) * 16);
+    if (this.silence >= silenceSamples) { this.finish(); return; }
     if (this.samples.length >= (this.options.maxChunkMs ?? 6000) * 16) {
       const pcm = Float32Array.from(this.samples); this.samples = this.samples.slice(-3200); this.voiced = Math.min(this.voiced, 3200); this.emit(pcm, false);
     }

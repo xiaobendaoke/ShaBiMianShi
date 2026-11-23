@@ -24,6 +24,10 @@ fs.writeFileSync(files[1], '测试学习笔记，缓存文档的编号是 QA-CAC
 dialog.showOpenDialog = async () => ({ canceled: false, filePaths: files });
 app.on('browser-window-created', (_event, win) => win.hide());
 const outcomes = [];
+const answerRequests = [];
+const routingRequests = [];
+const noContentQuestion = '只收到响应头的超时测试';
+let stalledConnectionClosed = false;
 let longConnectionClosed = false;
 let longStarted = false;
 let server;
@@ -52,13 +56,33 @@ async function run() {
         }
         if (req.url.endsWith('/chat/completions')) {
           if(body.messages[0]?.content?.includes('整理会话记忆')){res.setHeader('Content-Type','application/json');res.end(JSON.stringify({choices:[{message:{content:JSON.stringify({project:'订单项目',facts:[],working:[],uncertain:[]})}}]}));return;}
+          const instruction = body.messages[0]?.content || '';
+          if (instruction.includes('难度路由器') || instruction.includes('语音纠错与上下文指代补全器')) {
+            const input = body.messages.at(-1).content;
+            const question = instruction.includes('难度路由器') ? JSON.parse(input).question : input.split('\n当前问题：\n')[1];
+            const mode = question.includes('并发下权衡') ? 'deep' : 'fast';
+            if (instruction.includes('难度路由器') || instruction.includes('"thinkingMode"')) routingRequests.push({question, mode});
+            const reply = instruction.includes('难度路由器') ? {mode} : {
+              intent:'project_or_resume', rewrittenQuestion:question, searchQuery:question,
+              targetDocIds:[], thinkingMode:mode
+            };
+            res.setHeader('Content-Type','application/json');
+            res.end(JSON.stringify({choices:[{message:{content:JSON.stringify(reply)}}]}));
+            return;
+          }
           const input = body.messages.map(m=>typeof m.content==='string'?m.content:JSON.stringify(m.content)).join('\n');
-          const long = input.includes('取消测试');
+          const long = typeof body.messages.at(-1).content === 'string' && body.messages.at(-1).content.includes('取消测试');
           const hasImage = Array.isArray(body.messages.at(-1)?.content) && body.messages.at(-1).content.some(p=>p.type==='image_url');
           const answer = hasImage ? 'IMAGE CHECK 7391, f(3)=7' : long ? '取消测试正在生成，等待用户停止。'.repeat(300) : input.includes('QA-ORDER-731') ? '项目的独有编号为 QA-ORDER-731。' : '没有读取到相关项目资料。';
           if (!body.stream) { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ choices: [{ message: { content: answer } }] })); return; }
+          answerRequests.push(body);
           res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8' });
           res.flushHeaders();
+          if (body.messages.at(-1).content === noContentQuestion) {
+            res.write('data: {"choices":[{"delta":{"role":"assistant"}}]}\n\n');
+            res.on('close', () => { stalledConnectionClosed = true; });
+            return;
+          }
           if (long) longStarted = true;
           let at = 0;
           const timer = setInterval(() => {
@@ -108,7 +132,7 @@ async function run() {
   await wait(()=>main.webContents.executeJavaScript(`window.api.getSelectedSession().then(id=>id===${JSON.stringify(sessionA)})`),'session A switch');
   assert.deepEqual(await main.webContents.executeJavaScript(`window.api.getTurns(${JSON.stringify(sessionA)})`),[]);
   record('Actual sidebar creates two companies, renames without switching, and selects isolated sessions');
-  const profile = { id: 'qa-local-service', name: '本地回归服务', protocol: 'openai', baseUrl: `http://127.0.0.1:${port}/v1`, hasKey: true, modelChat: 'qa-chat', modelEmbed: 'qa-embed', modelVision: 'qa-vision', modelAsr: 'qa-asr', timeoutMs: 5000, isActive: false, createdAt: Date.now() };
+  const profile = { id: 'qa-local-service', name: '本地回归服务', protocol: 'openai', baseUrl: `http://127.0.0.1:${port}/v1`, hasKey: true, modelChat: 'deepseek-fixture', modelEmbed: 'qa-embed', modelVision: 'qa-vision', modelAsr: 'qa-asr', timeoutMs: 5000, isActive: false, createdAt: Date.now() };
   await main.webContents.executeJavaScript(`(async()=>{await window.api.saveProfile(${JSON.stringify(profile)});await window.api.setApiKey('qa-local-service','fixture-local-only');await window.api.setActiveRole('chat','qa-local-service');await window.api.setActiveRole('embed','qa-local-service');await window.api.setActiveRole('asr','qa-local-service');await window.api.selectAndImportFiles('default_lib');})()`);
   await wait(() => main.webContents.executeJavaScript('(async()=>{const s=await window.api.getIngestionStats();return !s.processing&&!s.queued;})()'), 'mixed document ingestion');
   const allDocuments = await main.webContents.executeJavaScript("window.api.getDocuments('default_lib')");
@@ -132,6 +156,7 @@ async function run() {
   }, 'real renderer streaming answer');
   const answer = await main.webContents.executeJavaScript('(async()=>{const s=await window.api.getSessions();return (await window.api.getTurns(s[0].id)).at(-1);})()');
   assert.ok(answer.answer.includes('QA-ORDER-731'));
+  assert.equal(answer.timings.thinking.mode, 'fast');
   assert.ok(answer.citations.some(c => c.fileName === 'order.md' && c.fullText.includes('QA-ORDER-731')));
   assert.ok((await main.webContents.executeJavaScript('document.body.innerText')).includes('QA-ORDER-731'));
   // Short spoken answers can fit entirely in the initial validation buffer.
@@ -173,6 +198,62 @@ async function run() {
   await wait(async()=>main.webContents.executeJavaScript('(async()=>{const s=(await window.api.getSessions())[0];return (await window.api.getTranscripts(s.id)).some(r=>r.status==="completed"&&r.text.includes("数据库索引"));})()'),'actual AudioWorklet to PCM to WAV to ASR');
   await main.webContents.executeJavaScript(`(()=>{const button=Array.from(document.querySelectorAll('button')).find(b=>b.innerText==='停止监听');button?.click();window.__fixtureAudio.osc.stop();window.__fixtureAudio.context.close();})()`);
   record('Actual AudioWorklet synthetic audio -> PCM frames -> VAD WAV -> ASR IPC -> persisted transcript; no physical microphone capture');
+
+  await createFromUI('QA 自动思考');
+  const latestTurn = () => main.webContents.executeJavaScript('(async()=>{const id=await window.api.getSelectedSession();return (await window.api.getTurns(id)).at(-1);})()');
+  const waitForAnswer = async (question, label, previousId) => {
+    let latest;
+    try {
+      await wait(async () => {
+        latest = await latestTurn();
+        if (latest?.question !== question || latest.id === previousId) return false;
+        if (latest.status === 'error') throw new Error(latest.error);
+        return latest.status === 'completed';
+      }, label);
+    } catch (error) {
+      const activity = await main.webContents.executeJavaScript(`(async()=>{
+        const id=await window.api.getSelectedSession(), turns=await window.api.getTurns(id);
+        return turns.slice(-4).map(({question,status,error})=>({question,status,error}));
+      })()`);
+      throw new Error(`${label}: ${error.message}. Recent fixture turns: ${JSON.stringify(activity)}`);
+    }
+    return latest;
+  };
+  const complexQuestion = '订单项目要怎样在并发下权衡一致性、吞吐量和恢复速度？';
+  assert.equal(await main.webContents.executeJavaScript('document.querySelector(\'select[aria-label="思考模式"]\').value'), 'auto');
+  await inputQuestion(main, complexQuestion);
+  await waitForAnswer(complexQuestion, 'automatic deep answer');
+  assert.equal((await latestTurn()).timings.thinking.mode, 'deep');
+  assert.equal(answerRequests.findLast(r=>r.messages.at(-1).content===complexQuestion).thinking.type,'enabled');
+  assert.equal(answerRequests.findLast(r=>r.messages.at(-1).content===complexQuestion).reasoning_effort,'low');
+  await wait(()=>main.webContents.executeJavaScript('document.querySelector("article").innerText.includes("深入思考")'),'deep decision displayed in the answer');
+
+  await main.webContents.executeJavaScript(`(()=>{const choice=document.querySelector('select[aria-label="思考模式"]');choice.value='fast';choice.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+  await wait(()=>main.webContents.executeJavaScript('(async()=>{const id=await window.api.getSelectedSession();return (await window.api.getSessions()).find(s=>s.id===id).thinkingMode==="fast";})()'),'persisted manual selection');
+  const routedBefore = routingRequests.length;
+  const manualQuestion = '请在并发下权衡回滚边界和恢复速度。';
+  await inputQuestion(main, manualQuestion);
+  await waitForAnswer(manualQuestion, 'manual fast answer');
+  assert.deepEqual((await latestTurn()).timings.thinking,{mode:'fast',source:'manual'});
+  assert.equal(routingRequests.length,routedBefore);
+  await wait(()=>main.webContents.executeJavaScript('Array.from(document.querySelectorAll("article button")).some(b=>b.innerText==="深入重答")'),'deep retry appears');
+  const priorTurn = await latestTurn();
+  await main.webContents.executeJavaScript(`Array.from(document.querySelectorAll('article button')).find(b=>b.innerText==='深入重答').click()`);
+  await waitForAnswer(manualQuestion, 'deep retry', priorTurn.id);
+  assert.deepEqual((await latestTurn()).timings.thinking,{mode:'deep',source:'manual'});
+  assert.equal(answerRequests.findLast(r=>r.messages.at(-1).content===manualQuestion).thinking.type,'enabled');
+  assert.equal(answerRequests.findLast(r=>r.messages.at(-1).content===manualQuestion).reasoning_effort,'high');
+  record('Packaged interface exposes automatic and manual thinking, persists the selected mode, and supports a one-turn deep retry');
+  await inputQuestion(main, noContentQuestion);
+  await wait(async () => (await latestTurn())?.question === noContentQuestion && (await latestTurn()).status === 'error', 'stalled answer ends');
+  await wait(() => stalledConnectionClosed, 'stalled HTTP connection closes');
+  const stalledTurn = await latestTurn();
+  assert.equal(stalledTurn.answer, '');
+  assert.equal(stalledTurn.timings.firstContentMs, undefined);
+  assert.ok(stalledTurn.timings.responseMs < stalledTurn.timings.totalMs);
+  assert.match(stalledTurn.error, /4 秒内未返回回答正文/);
+  await wait(() => main.webContents.executeJavaScript('document.body.innerText.includes("4 秒内未返回回答正文")'), 'stalled answer error renders');
+  record('Packaged fast answer bounds the time to first content, closes the HTTP connection and renders the timeout');
   main.showInactive(); floating.showInactive(); await new Promise(r=>setTimeout(r,250));
   fs.writeFileSync(path.join(output, '面试助手-修复后主窗口.png'), (await main.capturePage()).toPNG());
   fs.writeFileSync(path.join(output, '面试助手-修复后悬浮窗.png'), (await floating.capturePage()).toPNG());
