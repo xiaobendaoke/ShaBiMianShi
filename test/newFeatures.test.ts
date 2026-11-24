@@ -242,7 +242,7 @@ async function runNewFeaturesTest() {
   } finally {
     await mockServer.stop();
     db.close();
-    if (fs.existsSync(testDir)) fs.rmSync(testDir, { recursive: true });
+    if (fs.existsSync(testDir)) fs.rmSync(testDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 }
 

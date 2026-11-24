@@ -43,7 +43,9 @@ export class AudioCapture {
         const track=stream.getAudioTracks()[0];
         if (!track || track.readyState==='ended') throw new Error('没有可用音轨，请检查系统音频/麦克风权限');
         this.sources.set(source,{track,lastFrame:Date.now(),lastSound:0,frames:0,rms:0});
-        stream.getTracks().forEach(track => track.addEventListener('ended', () => {if (!this.stopped) {error('音源已断开，请重新开始监听'); this.stop();}}));
+        // Only audio track termination invalidates listening; auxiliary loopback video tracks
+        // may stop or reset independently on display changes without interrupting audio.
+        track.addEventListener('ended', () => {if (!this.stopped) {error('音源已断开，请重新开始监听'); this.stop();}});
         const context = new AudioContext(); this.contexts.push(context);
         const url = URL.createObjectURL(new Blob([processor], {type: 'text/javascript'}));
         try { await context.audioWorklet.addModule(url); } finally {URL.revokeObjectURL(url);}

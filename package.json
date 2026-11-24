@@ -3,18 +3,20 @@
   "productName": "傻逼面试",
   "version": "1.0.2",
   "type": "module",
-  "description": "免登录、独立 API、多文档知识库桌面面试助手（支持 Windows / macOS）",
+  "description": "免登录、独立 API、多文档知识库桌面面试助手（原生支持 macOS / Windows）",
   "main": "dist/main/index.js",
   "scripts": {
+    "predev": "node scripts/generate-icons.js && node scripts/build-native-audio.js --optional",
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "node scripts/generate-icons.js && node scripts/build-native-audio.js --optional && tsc && vite build",
     "test": "tsx test/runAllTests.ts",
     "test:features": "tsx test/newFeatures.test.ts",
-    "test:all": "tsx test/runAllTests.ts && tsx test/regressionP1.ts && tsx test/regressionRound2.ts && tsx test/newFeatures.test.ts",
+    "test:all": "tsx test/runAllTests.ts && tsx test/regressionP1.ts && tsx test/regressionRound2.ts && tsx test/newFeatures.test.ts && tsx test/winAppRelease.test.ts && tsx test/macAppRelease.test.ts",
     "bench": "tsx test/scaleBenchmark.ts",
     "pack": "node -e \"import(process.platform==='win32'?'./scripts/pack-win.js':'./scripts/pack-mac.js')\"",
     "pack:win": "node scripts/pack-win.js",
     "pack:mac": "node scripts/pack-mac.js",
+    "release:pkg": "node -e \"import(process.platform==='win32'?'./scripts/create-win-zip.js':'./scripts/create-dmg.js')\"",
     "dist": "electron-builder",
     "test:production": "node --import tsx test/productionRegression.ts",
     "test:interview": "tsx test/interviewWorkflow.test.ts",
@@ -25,6 +27,8 @@
   "build": {
     "appId": "com.interviewdog.independent",
     "productName": "傻逼面试",
+    "npmRebuild": false,
+    "icon": "resources/icon.png",
     "directories": {
       "output": "release"
     },
@@ -34,11 +38,13 @@
       "resources/**/*"
     ],
     "win": {
+      "icon": "resources/icon.ico",
       "target": [
         "dir"
       ]
     },
     "mac": {
+      "icon": "resources/icon.png",
       "target": [
         "dir"
       ],

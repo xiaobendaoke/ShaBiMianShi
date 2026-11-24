@@ -2,7 +2,7 @@ import { AnswerContent } from './AnswerContent';
 import React, { useState, useEffect, useRef } from 'react';
 import { Pin, PinOff, X, Eye, FileText, MousePointer, Camera, Crop, Loader2 } from 'lucide-react';
 import { TurnRecord, CitationSnapshot } from '../../../main/types';
-import { Badge, Kbd, cx, formatShortcut } from './ui';
+import { Badge, Kbd, cx, formatShortcut, isMacPlatform } from './ui';
 
 export const FloatingWindowView: React.FC = () => {
   const [currentTurn, setCurrentTurn] = useState<TurnRecord | null>(null);
@@ -115,8 +115,9 @@ export const FloatingWindowView: React.FC = () => {
   return (
     <div
       style={{ opacity }}
-      className="h-screen w-screen flex flex-col bg-elevated/85 backdrop-blur-2xl border border-separator rounded-2xl overflow-hidden text-label select-none"
+      className={cx('h-screen w-screen flex flex-col bg-transparent text-label select-none', !isMacPlatform && 'p-1.5')}
     >
+      <div className={cx('flex-1 min-h-0 flex flex-col bg-elevated/90 backdrop-blur-2xl border border-separator rounded-2xl overflow-hidden', !isMacPlatform && 'shadow-pop')}>
       {/* Draggable Titlebar */}
       <div className="titlebar-drag h-9 px-3 flex items-center justify-between shrink-0 border-b border-separator">
         <div className="flex items-center gap-2 min-w-0">
@@ -197,6 +198,7 @@ export const FloatingWindowView: React.FC = () => {
             暂无回答，在主窗口输入问题开始辅导
           </div>
         )}
+      </div>
       </div>
     </div>
   );

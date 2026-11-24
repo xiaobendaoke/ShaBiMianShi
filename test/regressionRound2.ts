@@ -674,7 +674,7 @@ async function runRound2Regression() {
   } finally {
     await mockServer.stop();
     db.close();
-    fs.rmSync(testDir, { recursive: true, force: true });
+    fs.rmSync(testDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 }
 

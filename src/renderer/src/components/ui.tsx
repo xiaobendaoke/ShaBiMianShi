@@ -9,7 +9,20 @@ export const isMacPlatform =
     ? /Mac|iPhone|iPod|iPad/i.test(navigator.userAgent || navigator.platform || '')
     : typeof process !== 'undefined' && process.platform === 'darwin';
 
+export const isWinPlatform =
+  typeof navigator !== 'undefined'
+    ? /Win/i.test(navigator.userAgent || navigator.platform || '')
+    : typeof process !== 'undefined' && process.platform === 'win32';
+
+/** Safe right inset for headers adjacent to Windows titleBarOverlay caption controls (~138px). */
+export const winTitlebarInset = isWinPlatform ? 'pr-[144px]' : '';
+
 export const formatShortcut = (mac: string, win: string) => (isMacPlatform ? mac : win);
+
+export const humanizeAccelerator = (accelerator: string) =>
+  accelerator
+    .replace(/CommandOrControl/g, isMacPlatform ? 'Cmd' : 'Ctrl')
+    .replace(/Return/g, 'Enter');
 
 export const cx = (...names: Array<string | false | null | undefined>) => names.filter(Boolean).join(' ');
 
@@ -30,9 +43,9 @@ export const fieldBox = 'h-8 rounded-lg bg-fill px-2.5 text-[13px] text-label pl
 export const textArea = 'w-full rounded-lg bg-fill px-2.5 py-2 text-[13px] leading-relaxed text-label placeholder:text-label-3 outline-none border border-transparent focus:border-accent focus:bg-canvas transition-colors resize-none';
 export const selectField = 'select-chevron h-7 rounded-md bg-fill pl-2 pr-6 text-[12px] text-label outline-none border border-transparent focus:border-accent appearance-none';
 
-/** Window toolbar sitting in the hidden-inset titlebar region; it doubles as the drag handle. */
-export function Toolbar({children, className}: {children?: React.ReactNode; className?: string}) {
-  return <header className={cx('titlebar-drag h-[52px] shrink-0 flex items-center gap-2 px-4', className)}>{children}</header>;
+/** Window toolbar sitting in the hidden-inset / titleBarOverlay region; it doubles as the drag handle. */
+export function Toolbar({children, className, edgeRight = true}: {children?: React.ReactNode; className?: string; edgeRight?: boolean}) {
+  return <header className={cx('titlebar-drag h-[52px] shrink-0 flex items-center gap-2 px-4', edgeRight && winTitlebarInset, className)}>{children}</header>;
 }
 
 export function PageHeader({title, subtitle, children}: {title: React.ReactNode; subtitle?: React.ReactNode; children?: React.ReactNode}) {

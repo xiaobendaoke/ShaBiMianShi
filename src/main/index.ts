@@ -39,6 +39,9 @@ import {
 // Preserve the original internal identity for existing encrypted credentials and data.
 // Display names and bundle names are independent of this compatibility identifier.
 app.setName('面试狗-独立版');
+if (process.platform === 'win32') {
+  app.setAppUserModelId?.('com.interviewdog.independent');
+}
 app.setPath('userData', path.join(app.getPath('appData'), '面试狗-独立版'));
 
 // An explicit isolated profile is useful for local QA without touching user data.
@@ -53,7 +56,7 @@ traceBoot('requesting-single-instance');
 const gotTheLock = app.requestSingleInstanceLock();
 traceBoot(gotTheLock?'waiting-for-app-ready':'old-instance-running');
 if (!gotTheLock) {
-  dialog.showErrorBox('旧实例仍在运行','请先从菜单完整退出傻逼面试，再打开新版。为保护配置，本次启动不会初始化数据库。');
+  dialog.showErrorBox('旧实例仍在运行','请先完整退出正在运行的傻逼面试实例，再打开新版。为保护配置，本次启动不会初始化数据库。');
   app.quit();
 }
 
@@ -70,7 +73,16 @@ let audioSession: AudioSessionService;
 let captureCoordinator: CaptureCoordinator;
 const nativeSystemAudio=new NativeSystemAudio();
 let nativeCapture:{id:string;owner:number;sessionId:string}|undefined;
-const nativeAudioEnabled=()=>process.platform==='darwin'&&process.env.INTERVIEWDOG_TEST_LEGACY_AUDIO!=='1';
+const nativeAudioEnabled=()=>(process.platform==='darwin'||process.platform==='win32')&&process.env.INTERVIEWDOG_TEST_LEGACY_AUDIO!=='1';
+function resolveNativeAudioExecutable(): string {
+  const binary = process.platform === 'win32' ? 'resources/system-audio.exe' : 'resources/system-audio';
+  const candidates = [
+    path.join(app.getAppPath(), binary),
+    ...(process.env.INTERVIEWDOG_RESOURCE_DIR ? [path.join(process.env.INTERVIEWDOG_RESOURCE_DIR, binary)] : []),
+    path.join(process.cwd(), binary)
+  ];
+  return candidates.find(candidate => fs.existsSync(candidate)) || candidates[0];
+}
 const memoryJobs=new Map<string,AbortController>();
 const pendingQuestions: {sessionId: string; question: string; libraryIds?: string[]; turnId: string; options: AnswerOptions}[] = [];
 function imageProfile() {
@@ -316,6 +328,9 @@ async function bootstrap() {
   keywordIndex = new KeywordIndex();
   vectorIndex = new VectorIndex();
   windowManager = new WindowManager();
+  if (db.getSetting('content_protection') === 'true') {
+    windowManager.setContentProtection(true);
+  }
   process.env.INTERVIEWDOG_RESOURCE_DIR ||= app.getAppPath();
   captureCoordinator = new CaptureCoordinator(() => BrowserWindow.getAllWindows(), busy => {windowManager.broadcast('screen:busy', busy); if (!busy) setTimeout(drainQuestions, 0);}, stage=>windowManager.broadcast('screen:stage',{stage,at:Date.now()}));
   audioSession = new AudioSessionService((wav, signal) => {
@@ -899,7 +914,16 @@ function registerIpc() {
   ipcMain.handle('app:get-version', () => app.getVersion());
   ipcMain.handle('window:toggle-floating', () => windowManager.toggleFloatingWindow());
   ipcMain.handle('window:set-opacity', (_, val: number) => windowManager.setOpacity(val));
-  ipcMain.handle('window:set-content-protection', (_, val: boolean) => windowManager.setContentProtection(val));
+  ipcMain.handle('window:set-content-protection', (_, val: boolean) => {
+    const enabled = Boolean(val);
+    db.setSetting('content_protection', String(enabled));
+    windowManager.setContentProtection(enabled);
+  });
+  ipcMain.handle('window:get-content-protection', () => windowManager.getContentProtection?.() ?? (db.getSetting('content_protection') === 'true'));
+  ipcMain.handle('api:reset-locked-vault', () => {
+    const res = keyVault.resetLockedVault();
+    return { ok: true, backupPath: res.backupPath };
+  });
   ipcMain.handle('window:toggle-click-through', () => windowManager.toggleClickThrough());
   ipcMain.handle('window:set-click-through', (_, val: boolean) => windowManager.setClickThrough(val));
   ipcMain.handle('window:get-click-through', () => windowManager.getIsClickThrough());
@@ -937,9 +961,12 @@ function registerIpc() {
   ipcMain.handle('audio:start-system',async(event,{sessionId,captureId}:{sessionId:string;captureId:string})=>{
     if(!nativeAudioEnabled())return {native:false};
     if(!audioSession.owns(event.sender.id,captureId,sessionId))throw Error('监听已结束，请重新开始');
+    const executable = resolveNativeAudioExecutable();
+    // On Windows, fall back smoothly to WebAudio loopback if the helper binary was not built yet.
+    if(process.platform==='win32'&&!fs.existsSync(executable))return {native:false};
     const current={id:captureId,owner:event.sender.id,sessionId};nativeCapture=current;
     try {
-      await nativeSystemAudio.start(path.join(app.getAppPath(),'resources/system-audio'),samples=>{
+      await nativeSystemAudio.start(executable,samples=>{
         if(nativeCapture===current)audioSession.frame(current.owner,current.id,'system',samples);
       },health=>{
         if(nativeCapture===current)windowManager.broadcast('audio:health',{sessionId,captureId,source:'system',...health});

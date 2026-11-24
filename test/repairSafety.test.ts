@@ -18,8 +18,15 @@ try {
  const reload=new KeyVault(root,storage);assert.equal(reload.getKey('asr'),'asr-fixture');reload.setKey('chat','updated');assert.equal(reload.getKey('asr'),'asr-fixture');
  assert.throws(()=>vault.setKey('vision','stale'),/其他进程/);
  const locked=new KeyVault(root,{...storage,decryptString:()=>{throw Error('locked')}});const protectedBytes=fs.readFileSync(path.join(root,'vault.enc'));
- assert.equal(locked.getHealth().state,'locked');assert.throws(()=>locked.setKey('asr','overwrite'),/禁止覆盖/);assert.throws(()=>locked.deleteKey('asr'),/禁止覆盖/);assert.deepEqual(fs.readFileSync(path.join(root,'vault.enc')),protectedBytes);
- console.log('PASS SS解密失败写保护、空值保留、单条更新保留其他密钥、跨进程写入保护');
+ assert.equal(locked.getHealth().state,'locked');assert.throws(()=>locked.setKey('asr','overwrite'),/禁止/);assert.throws(()=>locked.deleteKey('asr'),/禁止/);assert.deepEqual(fs.readFileSync(path.join(root,'vault.enc')),protectedBytes);
+ const resetVaultDir=path.join(root,'cross-os-vault');fs.mkdirSync(resetVaultDir,{recursive:true});fs.writeFileSync(path.join(resetVaultDir,'vault.enc'),protectedBytes);
+ const migVault=new KeyVault(resetVaultDir,{...storage,decryptString:()=>{throw Error('dpapi-keychain-mismatch')}});
+ assert.equal(migVault.getHealth().state,'locked');
+ const resetRes=migVault.resetLockedVault();
+ assert.ok(resetRes.backupPath&&fs.existsSync(resetRes.backupPath));
+ assert.deepEqual(fs.readFileSync(resetRes.backupPath!),protectedBytes);
+ migVault.setKey('chat','fresh-win-key');assert.equal(migVault.getKey('chat'),'fresh-win-key');
+ console.log('PASS SS解密失败写保护、跨系统迁移备份后重置、空值保留、单条更新保留其他密钥、跨进程写入保护');
  const raw=new Database(path.join(root,'app_data.db'));raw.pragma('journal_mode=WAL');raw.pragma('wal_autocheckpoint=0');raw.exec('CREATE TABLE original(value TEXT); INSERT INTO original VALUES (\'committed-in-wal\')');
  const destination=await backupUserData(root,'fixture-build');const snapshot=new Database(path.join(destination!,'app_data.db'),{readonly:true});assert.deepEqual(snapshot.prepare('SELECT * FROM original').all(),[{value:'committed-in-wal'}]);assert.equal(snapshot.pragma('integrity_check',{simple:true}),'ok');snapshot.close();raw.close();assert.deepEqual(fs.readFileSync(path.join(destination!,'vault.enc')),protectedBytes);
  console.log('PASS SQLite一致快照包含WAL提交，备份加密密钥字节一致');
@@ -39,4 +46,4 @@ try {
  globalThis.fetch=async()=>new Response(JSON.stringify({choices:[{message:{content:++calls===1?'【资料事实】我负责内核配置[资料1]':'我主要负责 Android 12 内核配置和 RKNPU 驱动使能。'},finish_reason:'stop'}]}),{headers:{'content-type':'application/json'}});
  try {await new ProviderService({getKey:()=> 'fixture'} as any).streamChat({id:'p',baseUrl:'https://fixture.invalid',modelChat:'fixture',timeoutMs:1000} as any,'你项目负责什么',[],'docs_and_general',[],{onToken:()=>{},onReset:()=>resets++,onComplete:s=>answer=s,onError:e=>error=e});assert.equal(error,undefined);assert.equal(calls,2);assert.equal(resets,1);assert.ok(!answer.includes('[资料'));}finally{globalThis.fetch=original;}
  console.log('PASS 资料报告输出触发一次完整口语改写，重置草稿');
-}finally{fs.rmSync(root,{recursive:true,force:true});}
+}finally{fs.rmSync(root,{recursive:true,force:true,maxRetries:5,retryDelay:100});}

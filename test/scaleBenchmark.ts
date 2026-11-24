@@ -1,5 +1,6 @@
 import os from 'os';
-import { fileURLToPath } from 'url';
+import path from 'path';
+import { fileURLToPath, pathToFileURL } from 'url';
 import { KeywordIndex } from '../src/main/indexing/keywordIndex';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -13,8 +14,9 @@ export function runScaleBenchmark() {
   console.log('======================================================================');
 
   const cpus = os.cpus();
-  console.log(`运行环境: macOS ${os.release()} (${os.arch()})`);
-  console.log(`CPU: ${cpus.length} 核心 - ${cpus[0]?.model || 'Apple Silicon'}`);
+  const osLabel = os.platform() === 'darwin' ? 'macOS' : os.platform() === 'win32' ? 'Windows' : os.platform();
+  console.log(`运行环境: ${osLabel} ${os.release()} (${os.arch()})`);
+  console.log(`CPU: ${cpus.length} 核心 - ${cpus[0]?.model || os.arch()}`);
   console.log(`物理内存: ${(os.totalmem() / (1024 ** 3)).toFixed(2)} GB`);
   console.log('----------------------------------------------------------------------');
 
@@ -185,6 +187,6 @@ export function runScaleBenchmark() {
   };
 }
 
-if (process.argv[1] === __filename) {
+if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {
   runScaleBenchmark();
 }

@@ -141,7 +141,7 @@ export const KnowledgeBaseView: React.FC<KnowledgeBaseViewProps> = ({
     <div className="flex-1 flex min-w-0 overflow-hidden aurora">
       {/* Libraries */}
       <aside className="w-[232px] shrink-0 border-r border-separator flex flex-col min-h-0 glass">
-        <Toolbar className="justify-between pr-2">
+        <Toolbar edgeRight={false} className="justify-between pr-2">
           <span className="text-[13px] font-semibold text-label">知识库列表</span>
           <button onClick={() => setNewLibraryName('项目与技术笔记')} className={button.icon} title="新建知识库">
             <Plus size={16} strokeWidth={1.75} />

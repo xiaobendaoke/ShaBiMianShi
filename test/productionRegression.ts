@@ -719,7 +719,7 @@ async function main() {
       limitations: ['HTTP/OS boundaries are test doubles; component hooks are simulated, not DOM; real suppliers and signing not verified'] };
     const reportPath = process.env.PRODUCTION_TEST_REPORT;
     if (reportPath) fs.writeFileSync(reportPath, JSON.stringify(report, null, 2));
-    fs.rmSync(directory, { recursive: true, force: true });
+    fs.rmSync(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

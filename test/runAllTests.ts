@@ -1,7 +1,7 @@
 import assert from 'assert';
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -433,6 +433,7 @@ async function runTests() {
   } finally {
     await mockServer.stop();
     db.close();
+    fs.rmSync(testDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 
   console.log('======================================================================');
@@ -447,7 +448,7 @@ async function runTests() {
   return testResults;
 }
 
-if (process.argv[1] === __filename) {
+if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {
   runTests().catch(err => {
     console.error('Test Suite Failed:', err);
     process.exit(1);

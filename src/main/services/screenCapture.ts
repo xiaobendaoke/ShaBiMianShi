@@ -72,32 +72,7 @@ interface SelectionRect {
   vh: number;
 }
 
-async function selectRegionOnDisplay(display: electron.Display, dataUrl: string): Promise<SelectionRect | null> {
-  const { x, y, width, height } = display.bounds;
-  const win = new electron.BrowserWindow({
-    x,
-    y,
-    width,
-    height,
-    frame: false,
-    transparent: false,
-    resizable: false,
-    movable: false,
-    minimizable: false,
-    maximizable: false,
-    fullscreen: true,
-    alwaysOnTop: true,
-    skipTaskbar: true,
-    backgroundColor: '#000000',
-    webPreferences: {
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true
-    }
-  });
-
-  win.setAlwaysOnTop(true, 'screen-saver');
-  const html = `<!DOCTYPE html>
+const OVERLAY_HTML = `<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8" />
@@ -120,106 +95,220 @@ async function selectRegionOnDisplay(display: electron.Display, dataUrl: string)
 </body>
 </html>`;
 
+function matchSourceForDisplay(
+  display: electron.Display,
+  displayIndex: number,
+  sources: electron.DesktopCapturerSource[]
+): electron.DesktopCapturerSource | undefined {
+  const validSources = sources.filter(s => !s.thumbnail.isEmpty());
+  if (!validSources.length) return undefined;
+
+  const byDisplayId = validSources.find(s => s.display_id && String(s.display_id) === String(display.id));
+  if (byDisplayId) return byDisplayId;
+
+  if (sources[displayIndex] && !sources[displayIndex].thumbnail.isEmpty()) {
+    return sources[displayIndex];
+  }
+
+  const byScreenIndex = validSources.find(s => s.id.startsWith(`screen:${displayIndex}:`));
+  if (byScreenIndex) return byScreenIndex;
+
+  return validSources[0];
+}
+
+async function selectRegionAcrossDisplays(
+  targets: Array<{ display: electron.Display; image: electron.NativeImage; isCursorDisplay: boolean }>
+): Promise<{ image: electron.NativeImage; rect: SelectionRect } | null> {
+  const windows: electron.BrowserWindow[] = [];
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let settled = false;
+
   try {
-    await win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
-    win.show();
-    win.focus();
+    const selectionRaces: Array<Promise<{ image: electron.NativeImage; rect: SelectionRect } | null>> = [];
 
-    const selectionPromise = win.webContents.executeJavaScript(
-      `new Promise(resolve => {
-        const bg = document.getElementById('bg');
-        bg.src = ${JSON.stringify(dataUrl)};
-        const mask = document.getElementById('mask');
-        const box = document.getElementById('box');
-        const size = document.getElementById('size');
-        let startX = 0, startY = 0, dragging = false;
-        const cancel = () => resolve(null);
-        window.addEventListener('keydown', e => { if (e.key === 'Escape') cancel(); });
-        window.addEventListener('contextmenu', e => { e.preventDefault(); cancel(); });
-        window.addEventListener('mousedown', e => {
-          if (e.button === 2) { cancel(); return; }
-          if (e.button !== 0) return;
-          dragging = true;
-          startX = e.clientX;
-          startY = e.clientY;
-          mask.style.display = 'none';
-          box.style.display = 'block';
-          box.style.left = startX + 'px';
-          box.style.top = startY + 'px';
-          box.style.width = '0px';
-          box.style.height = '0px';
-        });
-        window.addEventListener('mousemove', e => {
-          if (!dragging) return;
-          const x = Math.min(startX, e.clientX);
-          const y = Math.min(startY, e.clientY);
-          const w = Math.abs(e.clientX - startX);
-          const h = Math.abs(e.clientY - startY);
-          box.style.left = x + 'px';
-          box.style.top = y + 'px';
-          box.style.width = w + 'px';
-          box.style.height = h + 'px';
-          size.style.display = 'block';
-          size.style.left = Math.min(window.innerWidth - 80, x + w + 6) + 'px';
-          size.style.top = Math.min(window.innerHeight - 24, y + h + 6) + 'px';
-          size.textContent = Math.round(w) + ' × ' + Math.round(h);
-        });
-        window.addEventListener('mouseup', e => {
-          if (!dragging || e.button !== 0) return;
-          dragging = false;
-          const x = Math.min(startX, e.clientX);
-          const y = Math.min(startY, e.clientY);
-          const width = Math.abs(e.clientX - startX);
-          const height = Math.abs(e.clientY - startY);
-          if (width < 10 || height < 10) {
-            box.style.display = 'none';
-            size.style.display = 'none';
-            mask.style.display = 'block';
-            return;
-          }
-          resolve({ x, y, width, height, vw: window.innerWidth, vh: window.innerHeight });
-        });
-      })`,
-      true
-    ) as Promise<SelectionRect | null>;
+    for (const target of targets) {
+      const { bounds } = target.display;
+      const win = new electron.BrowserWindow({
+        x: bounds.x,
+        y: bounds.y,
+        width: bounds.width,
+        height: bounds.height,
+        show: false,
+        frame: false,
+        transparent: false,
+        resizable: false,
+        movable: false,
+        minimizable: false,
+        maximizable: false,
+        fullscreen: false,
+        enableLargerThanScreen: true,
+        alwaysOnTop: true,
+        skipTaskbar: true,
+        backgroundColor: '#000000',
+        webPreferences: {
+          contextIsolation: true,
+          nodeIntegration: false,
+          sandbox: true
+        }
+      });
+      windows.push(win);
+      win.setBounds(bounds);
+      win.setAlwaysOnTop(true, 'screen-saver');
 
-    const closedPromise = new Promise<null>(resolve => win.once('closed', () => resolve(null)));
+      await win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(OVERLAY_HTML));
+      const dataUrl = target.image.toDataURL();
+      await win.webContents.executeJavaScript(
+        ` (async () => {
+            const bg = document.getElementById('bg');
+            bg.src = ${JSON.stringify(dataUrl)};
+            if (bg.decode) { try { await bg.decode(); } catch {} }
+          })()`,
+        true
+      );
+      win.setBounds(bounds);
+
+      const userChoice = (win.webContents.executeJavaScript(
+        `new Promise(resolve => {
+          const mask = document.getElementById('mask');
+          const box = document.getElementById('box');
+          const size = document.getElementById('size');
+          let startX = 0, startY = 0, dragging = false;
+          const cancel = () => resolve(null);
+          window.addEventListener('keydown', e => { if (e.key === 'Escape') cancel(); });
+          window.addEventListener('contextmenu', e => { e.preventDefault(); cancel(); });
+          window.addEventListener('mousedown', e => {
+            if (e.button === 2) { cancel(); return; }
+            if (e.button !== 0) return;
+            window.focus();
+            dragging = true;
+            startX = e.clientX;
+            startY = e.clientY;
+            mask.style.display = 'none';
+            box.style.display = 'block';
+            box.style.left = startX + 'px';
+            box.style.top = startY + 'px';
+            box.style.width = '0px';
+            box.style.height = '0px';
+          });
+          window.addEventListener('mousemove', e => {
+            if (!dragging) return;
+            const x = Math.min(startX, e.clientX);
+            const y = Math.min(startY, e.clientY);
+            const w = Math.abs(e.clientX - startX);
+            const h = Math.abs(e.clientY - startY);
+            box.style.left = x + 'px';
+            box.style.top = y + 'px';
+            box.style.width = w + 'px';
+            box.style.height = h + 'px';
+            size.style.display = 'block';
+            size.style.left = Math.min(window.innerWidth - 80, x + w + 6) + 'px';
+            size.style.top = Math.min(window.innerHeight - 24, y + h + 6) + 'px';
+            size.textContent = Math.round(w) + ' × ' + Math.round(h);
+          });
+          window.addEventListener('mouseup', e => {
+            if (!dragging || e.button !== 0) return;
+            dragging = false;
+            const x = Math.min(startX, e.clientX);
+            const y = Math.min(startY, e.clientY);
+            const width = Math.abs(e.clientX - startX);
+            const height = Math.abs(e.clientY - startY);
+            if (width < 10 || height < 10) {
+              box.style.display = 'none';
+              size.style.display = 'none';
+              mask.style.display = 'block';
+              return;
+            }
+            resolve({ x, y, width, height, vw: window.innerWidth, vh: window.innerHeight });
+          });
+        })`,
+        true
+      ) as Promise<SelectionRect | null>).then(rect => (rect ? { image: target.image, rect } : null));
+
+      const closed = new Promise<null>(resolve => win.once('closed', () => {
+        if (!settled) resolve(null);
+      }));
+
+      selectionRaces.push(userChoice, closed);
+    }
+
+    // Show all pre-decoded display overlays together without fullscreen transition flicker.
+    let focusWin: electron.BrowserWindow | undefined;
+    windows.forEach((win, index) => {
+      if (targets[index]?.isCursorDisplay) focusWin = win;
+      win.showInactive();
+    });
+    (focusWin || windows[0])?.show();
+    (focusWin || windows[0])?.focus();
+
     const timeoutPromise = new Promise<never>((_, reject) => {
       timer = setTimeout(() => reject(new Error('选区截图超时')), 120000);
     });
 
-    return await Promise.race([selectionPromise, closedPromise, timeoutPromise]);
+    const chosen = await Promise.race([...selectionRaces, timeoutPromise]);
+    settled = true;
+    return chosen;
   } finally {
+    settled = true;
     clearTimeout(timer);
-    if (!win.isDestroyed()) win.destroy();
+    for (const win of windows) {
+      if (!win.isDestroyed()) win.destroy();
+    }
   }
 }
 
 async function captureScreenDesktop(mode: 'interactive' | 'fullscreen'): Promise<ScreenCaptureResult | null> {
   const cursor = electron.screen.getCursorScreenPoint?.() || { x: 0, y: 0 };
-  const display = electron.screen.getDisplayNearestPoint?.(cursor) || electron.screen.getPrimaryDisplay();
-  const scaleFactor = display.scaleFactor || 1;
-  const physicalWidth = Math.max(1, Math.round(display.bounds.width * scaleFactor));
-  const physicalHeight = Math.max(1, Math.round(display.bounds.height * scaleFactor));
+  const primary = electron.screen.getPrimaryDisplay();
+  const displays = electron.screen.getAllDisplays?.()?.length ? electron.screen.getAllDisplays() : [primary];
+  const cursorDisplay = electron.screen.getDisplayNearestPoint?.(cursor) || primary;
 
-  const sources = await electron.desktopCapturer.getSources({
-    types: ['screen'],
-    thumbnailSize: { width: physicalWidth, height: physicalHeight }
-  });
-  const source = sources.find(s => String(s.display_id) === String(display.id)) || sources[0];
-  if (!source || source.thumbnail.isEmpty()) {
-    throw new Error('无法获取屏幕画面，请检查显示设置或屏幕录制权限');
+  let maxPhysicalWidth = 1;
+  let maxPhysicalHeight = 1;
+  for (const d of displays) {
+    const sf = d.scaleFactor || 1;
+    maxPhysicalWidth = Math.max(maxPhysicalWidth, Math.round(d.bounds.width * sf));
+    maxPhysicalHeight = Math.max(maxPhysicalHeight, Math.round(d.bounds.height * sf));
   }
 
-  const fullImage = source.thumbnail;
+  let captureTimer: ReturnType<typeof setTimeout> | undefined;
+  const sources = await Promise.race([
+    electron.desktopCapturer.getSources({
+      types: ['screen'],
+      thumbnailSize: { width: maxPhysicalWidth, height: maxPhysicalHeight }
+    }),
+    new Promise<never>((_, reject) => {
+      captureTimer = setTimeout(() => reject(new Error('获取屏幕画面超时，请检查显示驱动状态')), 15000);
+    })
+  ]).finally(() => clearTimeout(captureTimer));
+
+  if (!sources.length || sources.every(s => s.thumbnail.isEmpty())) {
+    throw new Error('无法获取屏幕画面，请确认当前未处于锁屏或受保护安全桌面');
+  }
+
   if (mode === 'fullscreen') {
-    return validateCapturedPng(fullImage.toPNG());
+    const idx = Math.max(0, displays.findIndex(d => d.id === cursorDisplay.id));
+    const matched = matchSourceForDisplay(cursorDisplay, idx, sources);
+    if (!matched || matched.thumbnail.isEmpty()) {
+      throw new Error('无法获取当前显示器画面');
+    }
+    return validateCapturedPng(matched.thumbnail.toPNG());
   }
 
-  const rect = await selectRegionOnDisplay(display, fullImage.toDataURL());
-  if (!rect) return null;
+  const targets = displays
+    .map((display, idx) => {
+      const source = matchSourceForDisplay(display, idx, sources);
+      return source ? { display, image: source.thumbnail, isCursorDisplay: display.id === cursorDisplay.id } : null;
+    })
+    .filter((item): item is { display: electron.Display; image: electron.NativeImage; isCursorDisplay: boolean } => item !== null);
 
+  if (!targets.length) {
+    throw new Error('无法获取显示器画面');
+  }
+
+  const chosen = await selectRegionAcrossDisplays(targets);
+  if (!chosen) return null;
+
+  const { image: fullImage, rect } = chosen;
   const imgSize = fullImage.getSize();
   const scaleX = imgSize.width / Math.max(1, rect.vw);
   const scaleY = imgSize.height / Math.max(1, rect.vh);

@@ -10,7 +10,7 @@ import {
   Shield,
   PanelLeft
 } from 'lucide-react';
-import {cx, formatShortcut} from './ui';
+import {cx, formatShortcut, isMacPlatform} from './ui';
 
 export type NavTab = 'copilot' | 'knowledge' | 'history' | 'models' | 'settings';
 
@@ -50,8 +50,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   );
   return (
     <aside className={cx(collapsed ? 'w-[64px]' : 'w-[248px]', 'bg-sidebar border-r border-separator flex flex-col select-none transition-[width] duration-200 shrink-0')}>
-      {/* Titlebar zone: the traffic lights sit here. */}
-      <div className={cx('titlebar-drag h-[52px] shrink-0 flex items-center', collapsed ? 'justify-center pt-8' : 'justify-end px-3')}>
+      {/* Titlebar zone: on macOS the traffic lights sit on the left; on Windows caption buttons are on the far right. */}
+      <div className={cx('titlebar-drag h-[52px] shrink-0 flex items-center', collapsed ? cx('justify-center', isMacPlatform && 'pt-8') : 'justify-end px-3')}>
         {onToggleCollapse && (
           <button onClick={onToggleCollapse} className="h-7 w-7 inline-flex items-center justify-center rounded-md text-label-2 hover:bg-fill hover:text-label" title={collapsed ? '展开侧边栏' : '收起侧边栏'}>
             <PanelLeft size={16} strokeWidth={1.75} />
@@ -69,7 +69,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
       )}
 
-      <nav className={cx('px-2.5 space-y-0.5', collapsed && 'pt-6')}>
+      <nav className={cx('px-2.5 space-y-0.5', collapsed && (isMacPlatform ? 'pt-6' : 'pt-2'))}>
         {navItems.map(item => {
           const Icon = item.icon;
           const active = currentTab === item.id;

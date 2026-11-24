@@ -361,6 +361,7 @@ async function runRegressionSuite() {
   } finally {
     await mockServer.stop();
     db.close();
+    fs.rmSync(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 }
 

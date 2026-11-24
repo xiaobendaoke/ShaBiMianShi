@@ -36,7 +36,7 @@ import { SessionRecord, TurnRecord, CitationSnapshot, Library, ChunkRecord, Imag
 
 import {MemoryPanel} from './MemoryPanel';
 import { AudioPanel } from './AudioPanel';
-import { Badge, Kbd, Notice, Segmented, button, cx, formatShortcut, selectField, textArea } from './ui';
+import { Badge, Kbd, Notice, Segmented, button, cx, formatShortcut, humanizeAccelerator, selectField, textArea, winTitlebarInset } from './ui';
 import { TurnNavigation } from '../turnNavigation';
 
 
@@ -419,7 +419,7 @@ export const CopilotView: React.FC<CopilotViewProps> = ({ currentSession, librar
 
       {/* Main column */}
       <div className="@container flex-1 min-w-0 flex flex-col">
-        <header className="titlebar-drag h-[52px] shrink-0 flex items-center gap-2 px-3">
+        <header className={cx('titlebar-drag h-[52px] shrink-0 flex items-center gap-2 px-3', !showRightCol && winTitlebarInset)}>
           {!showLeftCol && <button onClick={() => setShowLeftCol(true)} className={button.icon} title="展开问题栏"><PanelLeft size={16} strokeWidth={1.75} /></button>}
           <div className="min-w-[72px] flex-1 pl-1">
             <div className="truncate text-[13px] font-semibold text-label">{currentSession?.title || '面试辅助'}</div>
@@ -575,7 +575,7 @@ export const CopilotView: React.FC<CopilotViewProps> = ({ currentSession, librar
         {/* Composer */}
         <div className="shrink-0 px-4 @min-[680px]:px-6 pb-5 pt-1">
           <div className="max-w-[820px] mx-auto space-y-2">
-            {shortcutFailures.length > 0 && <Notice tone="warning">快捷键冲突：{shortcutFailures.join('、')}</Notice>}
+            {shortcutFailures.length > 0 && <Notice tone="warning">快捷键冲突：{shortcutFailures.map(humanizeAccelerator).join('、')}</Notice>}
             {errorMessage && <Notice tone="danger" action={<button onClick={() => setErrorMessage('')} className={cx(button.icon, 'h-5 w-5')} title="关闭"><X size={12} /></button>}>{errorMessage}</Notice>}
             {queuedCount > 0 && (
               <Notice tone="warning" action={<>
@@ -699,7 +699,7 @@ export const CopilotView: React.FC<CopilotViewProps> = ({ currentSession, librar
       {/* Citations & evidence */}
       {showRightCol && (
         <aside className="w-[320px] shrink-0 border-l border-separator flex flex-col min-h-0 glass">
-          <div className="titlebar-drag h-[52px] shrink-0 flex items-center justify-between pl-4 pr-2 border-b border-separator">
+          <div className={cx('titlebar-drag h-[52px] shrink-0 flex items-center justify-between pl-4 pr-2 border-b border-separator', winTitlebarInset)}>
             <span className="text-[13px] font-semibold text-label">引用资料与来源</span>
             <button onClick={() => setShowRightCol(false)} className={button.icon} title="折叠引用栏"><PanelRight size={16} strokeWidth={1.75} /></button>
           </div>

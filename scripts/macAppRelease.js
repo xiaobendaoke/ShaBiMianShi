@@ -7,8 +7,8 @@ import {execFileSync} from 'node:child_process';
 export function assertAppStopped(appPath, listProcesses=()=>execFileSync('/bin/ps',['-axo','pid=,command='],{encoding:'utf8'})) {
   let processes;
   try {processes=listProcesses();} catch {throw Error('无法确认应用是否运行，未更新应用。请在可检查进程的终端中打包。');}
-  const prefix=path.resolve(appPath)+'/Contents/MacOS/';
-  const running=processes.split('\n').filter(line=>line.includes(prefix));
+  const prefix=path.resolve(appPath).replace(/\\/g,'/')+'/Contents/MacOS/';
+  const running=processes.split(/\r?\n/).filter(line=>line.replace(/\\/g,'/').includes(prefix));
   if(running.length)throw Error('新版应用仍在运行，请先从应用菜单完整退出，再执行 npm run pack。未覆盖应用资源。');
 }
 

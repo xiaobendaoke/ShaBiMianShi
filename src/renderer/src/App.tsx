@@ -66,6 +66,9 @@ function WorkspaceApp() {
   useEffect(() => {
     loadLibraries();
     loadSession();
+    void (window as any).api.getContentProtection?.().then((enabled: boolean) => {
+      setContentProtected(Boolean(enabled));
+    }).catch(() => {});
   }, []);
 
   const handleToggleFloating = async () => {

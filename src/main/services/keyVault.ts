@@ -4,6 +4,23 @@ import path from 'node:path';
 import os from 'node:os';
 import {createRequire} from 'node:module';
 interface SecureStorage {isEncryptionAvailable(): boolean; encryptString(text: string): Buffer; decryptString(data: Buffer): string;}
+function renameWithRetrySync(from: string, to: string) {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 6; attempt++) {
+    try {
+      fs.renameSync(from, to);
+      return;
+    } catch (error: any) {
+      lastError = error;
+      if (process.platform !== 'win32' || !['EPERM', 'EACCES', 'EBUSY'].includes(error?.code) || attempt === 5) {
+        throw error;
+      }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25 * (attempt + 1));
+    }
+  }
+  throw lastError;
+}
+
 export class KeyVault {
   private vaultPath: string;
   private masterKey: Buffer;
@@ -40,7 +57,29 @@ export class KeyVault {
       this.cache=new Map(Object.entries(data));this.state='ready';
     } catch {this.state='locked';this.cache.clear();}
   }
-  getHealth() {return {state:this.state, message:this.state==='locked'?'无法解密已有密钥，已禁止覆盖。请使用原系统账户凭据或钥匙串解锁后完整重启。':undefined};}
+  getHealth() {
+    const credentialHint = process.platform === 'win32' ? 'Windows 当前系统登录账户凭据 (DPAPI)' : '原系统账户凭据或钥匙串';
+    return {
+      state: this.state,
+      message: this.state === 'locked'
+        ? `无法解密已有密钥（可能跨系统迁移了数据目录或更换了系统账户），已禁止自动覆盖。请使用${credentialHint}解锁后重启，或在顶部提示栏手动备份重置密钥库。`
+        : undefined
+    };
+  }
+  resetLockedVault(): { backupPath: string | null } {
+    if (this.state !== 'locked') return { backupPath: null };
+    let backupPath: string | null = null;
+    if (fs.existsSync(this.vaultPath)) {
+      backupPath = `${this.vaultPath}.locked.${Date.now()}.bak`;
+      fs.copyFileSync(this.vaultPath, backupPath);
+      fs.rmSync(this.vaultPath, { force: true });
+    }
+    this.cache.clear();
+    this.digest = null;
+    this.state = 'missing';
+    this.format = 'aes';
+    return { backupPath };
+  }
   private assertWritable() {if(this.state==='locked') throw Error(this.getHealth().message);}
   private save(next: Map<string,string>) {
     this.assertWritable();
@@ -55,7 +94,7 @@ export class KeyVault {
       const body=Buffer.concat([cipher.update(text,'utf8'),cipher.final()]);data=Buffer.concat([iv,cipher.getAuthTag(),body]);
     }
     fs.mkdirSync(path.dirname(this.vaultPath),{recursive:true});const temp=`${this.vaultPath}.${crypto.randomUUID()}.tmp`;
-    try {const fd=fs.openSync(temp,'wx',0o600);try{fs.writeFileSync(fd,data);fs.fsyncSync(fd);}finally{fs.closeSync(fd);}fs.renameSync(temp,this.vaultPath);}
+    try {const fd=fs.openSync(temp,'wx',0o600);try{fs.writeFileSync(fd,data);fs.fsyncSync(fd);}finally{fs.closeSync(fd);}renameWithRetrySync(temp,this.vaultPath);}
     finally {fs.rmSync(temp,{force:true});}
     this.digest=this.hash(data);this.cache=next;this.state='ready';this.format=data.subarray(0,3).toString()==='SS:'?'system':'aes';
   }

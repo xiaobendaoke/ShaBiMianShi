@@ -54,7 +54,7 @@ export const SessionHistoryView: React.FC<SessionHistoryViewProps> = ({
     <div className="flex-1 flex min-w-0 overflow-hidden aurora">
       {/* Sessions */}
       <aside className="w-[264px] shrink-0 border-r border-separator flex flex-col min-h-0 glass">
-        <Toolbar className="justify-between">
+        <Toolbar edgeRight={false} className="justify-between">
           <span className="text-[13px] font-semibold text-label">所有会话存档</span>
           <span className="text-[11px] text-label-3">{sessions.length} 个记录</span>
         </Toolbar>

@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Mic, Loader2, Pause, Play, Zap, Captions, X, AlertCircle } from 'lucide-react';
 import type { TranscriptRecord } from '../../../main/types';
 import { AudioCapture } from '../services/audioCapture';
-import { Notice, button, cx, formatShortcut, selectField } from './ui';
+import { Notice, button, cx, formatShortcut, isMacPlatform, selectField } from './ui';
 
 export function AudioPanel({ sessionId, edit }: { sessionId?: string; edit: (text: string) => void }) {
   const api = (window as any).api;
@@ -256,7 +256,7 @@ export function AudioPanel({ sessionId, edit }: { sessionId?: string; edit: (tex
       {error && (
         <div className="mt-1.5">
           <Notice tone="danger" action={<>
-            <button onClick={() => void api.openAudioPermissions(mode === 'microphone' ? 'microphone' : 'system').catch((e: any) => setError(e.message))} className={cx(button.link, 'h-6 text-[12px] text-danger hover:bg-danger-soft')}>打开权限</button>
+            <button onClick={() => void api.openAudioPermissions(mode === 'microphone' ? 'microphone' : 'system').catch((e: any) => setError(e.message))} className={cx(button.link, 'h-6 text-[12px] text-danger hover:bg-danger-soft')}>{isMacPlatform || mode === 'microphone' ? '打开权限' : '声音设置'}</button>
             <button onClick={() => setError('')} className={cx(button.icon, 'h-6 w-6 text-danger')} title="关闭"><X size={12} /></button>
           </>}>
             <span className="inline-flex items-start gap-1.5"><AlertCircle size={13} className="shrink-0 mt-[2px]" />{error}</span>
