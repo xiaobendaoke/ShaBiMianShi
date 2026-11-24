@@ -30,23 +30,26 @@ import {
   RotateCcw,
   ImagePlus,
   Captions,
-  Brain
+  Brain,
+  Pencil
 } from 'lucide-react';
-import { SessionRecord, TurnRecord, CitationSnapshot, Library, ChunkRecord, ImageAttachment, AnswerOptions } from '../../../main/types';
+import { SessionRecord, TurnRecord, CitationSnapshot, Library, ChunkRecord, ImageAttachment, AnswerOptions, DocumentRecord } from '../../../main/types';
 
 import {MemoryPanel} from './MemoryPanel';
 import { AudioPanel } from './AudioPanel';
-import { Badge, Kbd, Notice, Segmented, button, cx, formatShortcut, humanizeAccelerator, selectField, textArea, winTitlebarInset } from './ui';
+import { Badge, Kbd, Notice, Segmented, button, cx, field, formatShortcut, humanizeAccelerator, selectField, textArea, winTitlebarInset } from './ui';
 import { TurnNavigation } from '../turnNavigation';
 
 
 interface CopilotViewProps {
   currentSession: SessionRecord | null;
   libraries: Library[];
+  documents?: DocumentRecord[];
   onSessionChange?: (session: SessionRecord) => void;
+  onEditSession?: () => void;
 }
 
-export const CopilotView: React.FC<CopilotViewProps> = ({ currentSession, libraries, onSessionChange }) => {
+export const CopilotView: React.FC<CopilotViewProps> = ({ currentSession, libraries, documents = [], onSessionChange, onEditSession }) => {
   const [questionInput, setQuestionInput] = useState('');
   const [turns, setTurns] = useState<TurnRecord[]>([]);
   const [currentTurn, setCurrentTurn] = useState<TurnRecord | null>(null);
@@ -204,9 +207,9 @@ export const CopilotView: React.FC<CopilotViewProps> = ({ currentSession, librar
     }
     setActiveLibraryIds(next);
 
-    // Persist to session
+    // Persist to session (toggling library clears single-doc subset lock so full library applies)
     if (currentSession) {
-      const updated = { ...currentSession, libraryIds: next, updatedAt: Date.now() };
+      const updated = { ...currentSession, libraryIds: next, documentIds: undefined, updatedAt: Date.now() };
       onSessionChange?.(updated);
       (window as any).api.saveSession(updated);
     }
@@ -350,11 +353,25 @@ export const CopilotView: React.FC<CopilotViewProps> = ({ currentSession, librar
   const queuedCount = turns.filter(t => t.status === 'queued').length;
   const selectedLibraries = libraries.filter(lib => activeLibraryIds.includes(lib.id));
   const canSend = !!currentSession && (!!questionInput.trim() || !!images.length);
+  const roleName = currentSession?.targetRole?.trim() || '';
+  const rawTitle = currentSession?.title?.trim() || '';
+  const hasJd = !!currentSession?.jobDescription?.trim();
+  const displayTitle = !currentSession
+    ? ''
+    : roleName && rawTitle.endsWith(` · ${roleName}`)
+      ? rawTitle.slice(0, -(` · ${roleName}`).length)
+      : rawTitle || '面试辅助';
+  const sameTitleAndRole = !!roleName && displayTitle === roleName;
+  const scopedDocs = !currentSession
+    ? []
+    : currentSession.documentIds !== undefined
+      ? documents.filter(d => currentSession.documentIds!.includes(d.id))
+      : documents.filter(d => d.libraryIds.some(lid => activeLibraryIds.includes(lid)));
 
   return (
     <div className="flex-1 flex min-w-0 overflow-hidden aurora">
-      {/* Question list for this interview */}
-      {showLeftCol && (
+      {/* Question list for this interview (hidden on pure blank startup before a session is opened) */}
+      {currentSession && showLeftCol && (
         <aside className="w-[264px] shrink-0 border-r border-separator flex flex-col min-h-0 glass">
           <div className="titlebar-drag h-[52px] shrink-0 flex items-center justify-between pl-4 pr-2 border-b border-separator">
             <div className="text-[13px] font-semibold text-label">本场问答记录 <span className="font-normal text-label-3">{turns.length}</span></div>
@@ -396,6 +413,14 @@ export const CopilotView: React.FC<CopilotViewProps> = ({ currentSession, librar
             </summary>
             <div className="px-3 pb-3 space-y-2 max-h-[45vh] overflow-y-auto">
               <MemoryPanel sessionId={currentSession?.id} />
+              <input
+                type="text"
+                className={cx(field, 'h-7 text-[12px]')}
+                placeholder="本场目标岗位（如：销售、产品经理、后端开发）"
+                defaultValue={currentSession?.targetRole || ''}
+                key={`${currentSession?.id}-${currentSession?.targetRole || ''}-role`}
+                onBlur={e => saveSessionFields({ targetRole: e.target.value.trim() })}
+              />
               <textarea
                 className={cx(textArea, 'text-[12px]')}
                 placeholder="填写本人负责的项目、职责、可核实结果"
@@ -406,9 +431,9 @@ export const CopilotView: React.FC<CopilotViewProps> = ({ currentSession, librar
               />
               <textarea
                 className={cx(textArea, 'text-[12px]')}
-                placeholder="目标职位 / JD"
+                placeholder="职位描述 / 具体 JD（可选）"
                 defaultValue={currentSession?.jobDescription || ''}
-                key={`${currentSession?.id}-jd`}
+                key={`${currentSession?.id}-${currentSession?.jobDescription || ''}-jd`}
                 rows={3}
                 onBlur={e => saveSessionFields({ jobDescription: e.target.value })}
               />
@@ -420,17 +445,49 @@ export const CopilotView: React.FC<CopilotViewProps> = ({ currentSession, librar
       {/* Main column */}
       <div className="@container flex-1 min-w-0 flex flex-col">
         <header className={cx('titlebar-drag h-[52px] shrink-0 flex items-center gap-2 px-3', !showRightCol && winTitlebarInset)}>
-          {!showLeftCol && <button onClick={() => setShowLeftCol(true)} className={button.icon} title="展开问题栏"><PanelLeft size={16} strokeWidth={1.75} /></button>}
-          <div className="min-w-[72px] flex-1 pl-1">
-            <div className="truncate text-[13px] font-semibold text-label">{currentSession?.title || '面试辅助'}</div>
+          {currentSession && !showLeftCol && <button onClick={() => setShowLeftCol(true)} className={button.icon} title="展开问题栏"><PanelLeft size={16} strokeWidth={1.75} /></button>}
+          <div className="min-w-[72px] flex-1 pl-1 flex items-center gap-2">
+            {currentSession && (
+              <div className="truncate text-[13px] font-semibold text-label">{displayTitle}</div>
+            )}
+            {currentSession && onEditSession && (
+              <button
+                onClick={onEditSession}
+                title="点击修改本场目标岗位、粘贴 JD 或切换使用的简历"
+                className="inline-flex items-center gap-1 h-6 px-2 rounded-md bg-accent-soft text-accent-text hover:brightness-95 text-[11px] font-medium shrink-0 transition-all"
+              >
+                {sameTitleAndRole ? (
+                  <>
+                    <Pencil size={10} />
+                    <span>{hasJd ? '已附 JD · 修改' : '岗位设置'}</span>
+                  </>
+                ) : (
+                  <>
+                    <Sparkles size={11} />
+                    <span className="max-w-[140px] truncate">
+                      {roleName ? `岗位：${roleName}` : '设定目标岗位'}
+                    </span>
+                    {hasJd && <span className="opacity-75">· JD</span>}
+                  </>
+                )}
+              </button>
+            )}
           </div>
 
           {/* Knowledge base scope */}
-          <div className="relative">
-            <button onClick={() => setScopeOpen(!scopeOpen)} className={cx(button.plain, 'h-7 text-[12px]', activeLibraryIds.length === 0 && 'text-warning')} title="选择本场检索的知识库">
+          {currentSession && <div className="relative">
+            <button onClick={() => setScopeOpen(!scopeOpen)} className={cx(button.plain, 'h-7 text-[12px]', activeLibraryIds.length === 0 && 'text-warning')} title="选择本场检索的知识库或指定简历">
               <BookOpen size={14} strokeWidth={1.75} />
               <span className="max-w-[180px] truncate @max-[620px]:hidden">
-                {libraries.length === 0 ? '暂无知识库' : activeLibraryIds.length === 0 ? '未选知识库' : selectedLibraries.length === 1 ? selectedLibraries[0].name : `${selectedLibraries.length} 个知识库`}
+                {libraries.length === 0
+                  ? '暂无知识库'
+                  : currentSession?.documentIds !== undefined
+                    ? `指定 ${currentSession.documentIds.length} 份简历/资料`
+                    : activeLibraryIds.length === 0
+                      ? '未选知识库'
+                      : selectedLibraries.length === 1
+                        ? selectedLibraries[0].name
+                        : `${selectedLibraries.length} 个知识库`}
               </span>
               <ChevronDown size={12} />
             </button>
@@ -438,6 +495,11 @@ export const CopilotView: React.FC<CopilotViewProps> = ({ currentSession, librar
               <button aria-label="关闭知识库选择" className="fixed inset-0 z-40 cursor-default" onClick={() => setScopeOpen(false)} />
               <div className="absolute right-0 top-full mt-1.5 z-50 w-72 rounded-xl bg-elevated shadow-pop border border-separator p-1.5 animate-fade-up">
                 <div className="px-2.5 pt-1.5 pb-2 text-[11px] font-semibold text-label-3">知识库：本场回答检索范围</div>
+                {currentSession?.documentIds !== undefined && (
+                  <div className="mx-1.5 mb-1.5 rounded-lg bg-accent-soft px-2.5 py-1.5 text-[11px] text-accent-text">
+                    当前已精确限定使用 {currentSession.documentIds.length} 份简历/资料
+                  </div>
+                )}
                 {libraries.length === 0 && <p className="px-2.5 pb-2 text-[12px] text-label-2">暂无知识库，请先在“知识库”中导入资料。</p>}
                 {libraries.map(lib => {
                   const isSelected = activeLibraryIds.includes(lib.id);
@@ -449,10 +511,21 @@ export const CopilotView: React.FC<CopilotViewProps> = ({ currentSession, librar
                     </button>
                   );
                 })}
+                {onEditSession && (
+                  <div className="mt-1 pt-1 border-t border-separator">
+                    <button
+                      onClick={() => { setScopeOpen(false); onEditSession(); }}
+                      className="w-full flex items-center justify-between rounded-lg px-2.5 h-8 text-[12px] font-medium text-accent-text hover:bg-accent-soft"
+                    >
+                      <span>按单份简历勾选 / 修改目标岗位…</span>
+                      <ChevronRight size={13} />
+                    </button>
+                  </div>
+                )}
                 {libraries.length > 0 && activeLibraryIds.length === 0 && <p className="px-2.5 py-1.5 text-[11px] text-warning">未选知识库：项目类问题将无法引用资料</p>}
               </div>
             </>}
-          </div>
+          </div>}
 
           {turns.length > 0 && (
             <div className="flex items-center text-[12px] text-label-2">
@@ -461,9 +534,11 @@ export const CopilotView: React.FC<CopilotViewProps> = ({ currentSession, librar
               <button onClick={() => commandRef.current('next')} disabled={turnIndex >= turns.length - 1} className={button.icon} title={`下一题 (${formatShortcut('Cmd+Alt+→', 'Ctrl+Alt+→')})`}><ChevronRight size={16} /></button>
             </div>
           )}
-          <button onClick={() => setShowRightCol(!showRightCol)} className={cx(button.icon, showRightCol && 'bg-fill text-label')} title={showRightCol ? '折叠引用栏' : '展开引用栏'}>
-            <PanelRight size={16} strokeWidth={1.75} />
-          </button>
+          {currentSession && (
+            <button onClick={() => setShowRightCol(!showRightCol)} className={cx(button.icon, showRightCol && 'bg-fill text-label')} title={showRightCol ? '折叠引用栏' : '展开引用栏'}>
+              <PanelRight size={16} strokeWidth={1.75} />
+            </button>
+          )}
         </header>
 
         {/* Answer canvas */}
@@ -542,31 +617,73 @@ export const CopilotView: React.FC<CopilotViewProps> = ({ currentSession, librar
                 )}
               </div></div>
             </article>
+          ) : !currentSession ? (
+            <div className="min-h-full" />
           ) : (
-            <div className="min-h-full flex flex-col items-center justify-center px-8 py-10 text-center animate-fade-up">
-              <div className="text-[13px] font-semibold tracking-wide text-intelligence">准备就绪，随时提问</div>
-              <h2 className="mt-3 text-[52px] @max-[640px]:text-[38px] leading-[1.06] font-bold tracking-[-0.04em] text-label">
-                面试官一开口，<br /><span className="text-intelligence">答案就在这里。</span>
-              </h2>
-              <p className="mt-5 text-[16px] leading-relaxed text-label-2 max-w-[34em]">
-                持续听题、自动分段转写；截图直接解题。默认口语短答，个人经历以资料为依据。
-              </p>
-              <div className="mt-10 grid grid-cols-2 @min-[900px]:grid-cols-4 gap-3 w-full max-w-[880px] text-left">
-                {[
-                  {icon: Mic, title: '语音听题', desc: '系统声音或麦克风，停顿后自动提交', keys: formatShortcut('⇧⌘G', 'Ctrl+Shift+G'), tile: 'from-[#40c8ff] to-[#0a84ff]'},
-                  {icon: Crop, title: '选区解题', desc: '框选题目，多张截图一起作答', keys: formatShortcut('⌥⌘X', 'Ctrl+Alt+X'), tile: 'from-[#da8fff] to-[#bf5af2]'},
-                  {icon: BookOpen, title: '资料问答', desc: '结合简历与项目文档，引用可追溯', keys: '知识库', tile: 'from-[#ffb340] to-[#ff7a00]'},
-                  {icon: Layers, title: '悬浮窗', desc: '独立显示答案，可鼠标穿透', keys: formatShortcut('⇧⌘Space', 'Ctrl+Shift+Space'), tile: 'from-[#5ee0a0] to-[#28b463]'}
-                ].map(tip => (
-                  <div key={tip.title} className="rounded-[22px] bg-surface shadow-card p-5 transition-transform hover:-translate-y-0.5">
-                    <div className={cx('h-10 w-10 rounded-[12px] bg-gradient-to-br text-white flex items-center justify-center shadow-[inset_0_1px_0_rgba(255,255,255,0.35)]', tip.tile)}>
-                      <tip.icon size={20} strokeWidth={2} />
-                    </div>
-                    <div className="mt-4 text-[15px] font-semibold text-label">{tip.title}</div>
-                    <div className="mt-1 text-[12px] leading-relaxed text-label-2 min-h-[3em]">{tip.desc}</div>
-                    <div className="mt-3"><Kbd>{tip.keys}</Kbd></div>
+            <div className="min-h-full flex items-center justify-center px-6 py-8 animate-fade-up">
+              <div className="w-full max-w-[420px] rounded-2xl bg-surface shadow-card border border-separator/70 p-5 text-left space-y-3.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[12px] font-semibold text-label-2">本场面试核对</span>
+                  {onEditSession && (
+                    <button
+                      type="button"
+                      onClick={onEditSession}
+                      className={cx(button.link, 'h-6 px-2 text-[12px]')}
+                    >
+                      <Pencil size={11} />
+                      <span>修改</span>
+                    </button>
+                  )}
+                </div>
+
+                <div className="space-y-2.5 text-[13px]">
+                  <div className="flex items-baseline justify-between gap-3">
+                    <span className="text-[12px] text-label-3 shrink-0">目标岗位</span>
+                    <span className={cx('font-semibold text-right truncate', roleName ? 'text-label' : 'text-warning')}>
+                      {roleName || '未填写（建议点击修改补充）'}
+                    </span>
                   </div>
-                ))}
+
+                  <div className="space-y-1.5">
+                    <div className="text-[12px] text-label-3">绑定简历 / 资料</div>
+                    {scopedDocs.length > 0 ? (
+                      <div className="flex flex-wrap gap-1.5">
+                        {scopedDocs.slice(0, 4).map(doc => (
+                          <span key={doc.id} title={doc.fileName} className="inline-flex items-center gap-1 max-w-full rounded-md bg-fill px-2 py-1 text-[12px] text-label">
+                            <FileText size={12} className="text-accent shrink-0" />
+                            <span className="truncate max-w-[320px]">{doc.fileName}</span>
+                          </span>
+                        ))}
+                        {scopedDocs.length > 4 && (
+                          <span className="inline-flex items-center rounded-md bg-fill px-2 py-1 text-[11px] text-label-2">
+                            +{scopedDocs.length - 4} 份资料
+                          </span>
+                        )}
+                      </div>
+                    ) : selectedLibraries.length > 0 ? (
+                      <div className="text-[12px] text-label-2">
+                        {selectedLibraries.map(l => l.name).join('、')}
+                      </div>
+                    ) : (
+                      <div className="text-[12px] text-warning">尚未绑定资料</div>
+                    )}
+                  </div>
+
+                  <div className="space-y-1">
+                    <div className="text-[12px] text-label-3">职位描述（JD）</div>
+                    {hasJd ? (
+                      <p className="text-[12px] leading-relaxed text-label-2 line-clamp-2 rounded-lg bg-fill px-2.5 py-1.5">
+                        {currentSession.jobDescription!.trim()}
+                      </p>
+                    ) : (
+                      <div className="text-[12px] text-label-3">未附具体 JD（按目标岗位通用要求对齐）</div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="pt-2.5 border-t border-separator text-[11px] text-label-3">
+                  已就绪 · 点击下方「开始监听」或输入问题后自动进入回答视图
+                </div>
               </div>
             </div>
           )}
@@ -595,9 +712,9 @@ export const CopilotView: React.FC<CopilotViewProps> = ({ currentSession, librar
               </>}>待答 {queuedCount} 题</Notice>
             )}
 
-            <AudioPanel sessionId={currentSession?.id} edit={setQuestionInput} />
+            <AudioPanel sessionId={currentSession?.id} edit={setQuestionInput} onRequireSession={!currentSession ? onEditSession : undefined} />
 
-            <div className="rounded-[24px]"><div className="rounded-[24px] bg-surface shadow-pop">
+            <div className="rounded-[24px]"><div className="rounded-[24px] bg-surface shadow-pop border border-separator/70 focus-within:border-accent/55 focus-within:shadow-[0_2px_8px_rgba(0,0,0,0.06),0_0_0_3px_rgba(0,113,227,0.12)] transition-all">
               {/* Attached Screenshots Preview */}
               {images.length > 0 && (
                 <div className="flex items-center gap-2 px-3 pt-3 overflow-x-auto">
@@ -615,28 +732,39 @@ export const CopilotView: React.FC<CopilotViewProps> = ({ currentSession, librar
 
               <textarea
                 value={questionInput}
+                readOnly={!currentSession && !!onEditSession}
+                onFocus={e => {
+                  if (!currentSession && onEditSession) {
+                    e.currentTarget.blur();
+                    onEditSession();
+                  }
+                }}
                 onChange={e => setQuestionInput(e.target.value)}
                 onKeyDown={e => {
                   if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
                     e.preventDefault();
+                    if (!currentSession && onEditSession) {
+                      onEditSession();
+                      return;
+                    }
                     handleSend();
                   }
                 }}
-                placeholder="输入面试官问题，如：订单重复提交如何保证接口幂等性？"
+                placeholder={!currentSession ? '点击左侧「新建面试」或点击此处设定本场目标岗位后开始…' : roleName ? `输入「${roleName}」面试问题，或点击开始监听自动识别…` : '输入面试官问题，如：先做个自我介绍 / 订单重复提交如何解决？'}
                 rows={2}
                 className="block w-full bg-transparent px-4 pt-3.5 pb-1 text-[14px] leading-relaxed text-label placeholder:text-label-3 outline-none resize-none"
               />
 
               <div className="flex items-center gap-1 px-2 pb-2">
-                <button disabled={isCapturing || !currentSession} onClick={() => void handleScreenCapture('interactive')} className={cx(button.plain, 'h-7 px-2 text-[12px]')} title={`选区截图解题 (快捷键: ${formatShortcut('Cmd+Alt+X', 'Ctrl+Alt+X')})`}>
+                <button disabled={isCapturing || (!currentSession && !onEditSession)} onClick={() => { if (!currentSession) { onEditSession?.(); return; } void handleScreenCapture('interactive'); }} className={cx(button.plain, 'h-7 px-2 text-[12px]')} title={`选区截图解题 (快捷键: ${formatShortcut('Cmd+Alt+X', 'Ctrl+Alt+X')})`}>
                   {isCapturing ? <Loader2 size={14} className="animate-spin" /> : <Crop size={14} strokeWidth={1.75} />}
                   <span className="@max-[600px]:hidden">选区解题</span>
                 </button>
-                <button disabled={isCapturing || !currentSession} onClick={() => void handleScreenCapture('fullscreen')} className={cx(button.plain, 'h-7 px-2 text-[12px]')} title={`全屏截图解题 (快捷键: ${formatShortcut('Cmd+Shift+S', 'Ctrl+Shift+S')})`}>
+                <button disabled={isCapturing || (!currentSession && !onEditSession)} onClick={() => { if (!currentSession) { onEditSession?.(); return; } void handleScreenCapture('fullscreen'); }} className={cx(button.plain, 'h-7 px-2 text-[12px]')} title={`全屏截图解题 (快捷键: ${formatShortcut('Cmd+Shift+S', 'Ctrl+Shift+S')})`}>
                   <Camera size={14} strokeWidth={1.75} />
                   <span className="@max-[600px]:hidden">全屏</span>
                 </button>
-                <button disabled={isCapturing || images.length >= 8 || !currentSession} onClick={() => void handleScreenCapture('interactive', true)} className={cx(button.plain, 'h-7 px-2 text-[12px]')} title="追加截图 (最多8张)">
+                <button disabled={isCapturing || images.length >= 8 || (!currentSession && !onEditSession)} onClick={() => { if (!currentSession) { onEditSession?.(); return; } void handleScreenCapture('interactive', true); }} className={cx(button.plain, 'h-7 px-2 text-[12px]')} title="追加截图 (最多8张)">
                   <ImagePlus size={14} strokeWidth={1.75} />
                   <span className="@max-[600px]:hidden">+截屏</span>
                 </button>

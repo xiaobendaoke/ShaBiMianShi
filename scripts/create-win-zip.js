@@ -41,8 +41,9 @@ try {
     'Add-Type -AssemblyName System.IO.Compression.FileSystem;',
     `[System.IO.Compression.ZipFile]::CreateFromDirectory(${JSON.stringify(appFolder)}, ${JSON.stringify(output)}, [System.IO.Compression.CompressionLevel]::Optimal, $true, [System.Text.Encoding]::UTF8)`
   ].join(' ');
+  const encodedCommand = Buffer.from(psScript, 'utf16le').toString('base64');
 
-  execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', psScript], {
+  execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', encodedCommand], {
     stdio: 'inherit'
   });
 

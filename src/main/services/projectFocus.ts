@@ -9,8 +9,9 @@ export function isResumeDocument(doc:{fileName:string;fileType?:string}):boolean
 }
 export function isIdentityOrResumeQuery(question:string):boolean {
   const q=question.normalize('NFKC').trim();
-  if(/(?:感谢|谢谢|听完).{0,12}自我介绍|我先.{0,6}自我介绍.{0,28}(?:我是|面试官)/.test(q))return false;
-  return /(?:你是谁|我是谁|你叫什么|我叫什么|(?:你|我)(?:是)?(?:干啥|做什么|干什么|搞什么)的|(?:你|我)的?(?:实际)?(?:职业|工作方向|技术方向|求职方向|研究方向|主要职责|岗位|职位|个人背景|教育背景|学历|学校|专业|实习经历|工作经历)|(?:你|我)的实际工作是什么|自我介绍|个人介绍|介绍一下你自己|根据简历)/.test(q);
+  if(/(?:感谢|谢谢|听完).{0,12}自我介绍|我先.{0,6}自我介绍.{0,28}(?:我是|面试官)|\blet\s+me\s+introduce\s+myself\b|\bthank\s+you\s+for\s+your\s+(?:self[\s-]?)?introduction\b|\bi\s+am\s+your\s+interviewer\b/i.test(q))return false;
+  return /(?:你是谁|我是谁|你叫什么|我叫什么|(?:你|我)(?:是)?(?:干啥|做什么|干什么|搞什么)的|(?:你|我)的?(?:实际)?(?:职业|工作方向|技术方向|求职方向|研究方向|主要职责|岗位|职位|个人背景|教育背景|学历|学校|专业|实习经历|工作经历)|(?:你|我)的实际工作是什么|自我介绍|个人介绍|介绍一下你自己|根据简历|(?:你|我)(?:为什么|为啥).{0,12}(?:面|投|应聘|选择?|转岗|转行|跨行|来我们)|(?:为什么|为啥)(?:想|要)?(?:转岗|转行|跨专业|跨行|应聘)|(?:你|我).{0,10}(?:应聘|胜任|适合|匹配).{0,12}(?:优势|竞争力|岗位|职位)|(?:你|我)的?(?:核心|最大|个人)(?:优势|竞争力))/.test(q) ||
+    /\b(?:introduce\s+yourself|self[\s-]?introduction|tell\s+(?:me|us)\s+(?:a\s+(?:little|bit)\s+)?about\s+yourself|walk\s+(?:me|us)\s+through\s+your\s+(?:resume|cv|background|experience)|who\s+are\s+you|what\s+is\s+your\s+(?:background|major|education|current\s+role|profession|career\s+goal)|what\s+(?:is|are)\s+your\s+(?:\w+\s+)?(?:strengths?|weaknesses|advantages?)|your\s+(?:biggest|greatest|core|main|key)\s+(?:strengths?|weaknesses|advantages?)|why\s+(?:do\s+you\s+want\s+to\s+(?:join|work|apply)|should\s+we\s+hire\s+you|did\s+you\s+(?:apply|choose\s+this)|this\s+(?:role|job|position)|our\s+company))\b/i.test(q);
 }
 export function isExplicitResumeEntityQuery(question:string):boolean {
   const q=question.normalize('NFKC');
@@ -18,8 +19,9 @@ export function isExplicitResumeEntityQuery(question:string):boolean {
 }
 export function isClearStandaloneTechOrCodeQuestion(question:string):boolean {
   const q=question.normalize('NFKC').trim();
-  if(!q||/携程|你|你们|我|我们|这(?:个|项目|块|里|套|边)|那(?:个|块|里|边|它)|刚才|当时|上一|项目|简历|实习|公司/.test(q))return false;
-  return /^(?:什么是|什么叫|解释一下|请解释|讲一下|说说)[^，。！？!?]{1,22}[？?。]?$|.{1,20}(?:和|与|跟).{1,20}(?:有什么区别|的区别是什么|区别在哪)[？?。]?$|(?:死锁|虚函数|多态|智能指针|三次握手|四次挥手|进程|线程|协程|互斥锁|自旋锁|内存泄漏|栈和堆|大小端|volatile|static|const).*(?:什么|区别|原理|实现|条件|作用|写代码|写一个)/i.test(q);
+  if(!q||/携程|你|你们|我|我们|这(?:个|项目|块|里|套|边)|那(?:个|块|里|边|它)|刚才|当时|上一|项目|简历|实习|公司|\b(?:your|yourself|resume|project|projects|internship|company)\b/i.test(q))return false;
+  return /^(?:什么是|什么叫|解释一下|请解释|讲一下|说说)[^，。！？!?]{1,22}[？?。]?$|.{1,20}(?:和|与|跟).{1,20}(?:有什么区别|的区别是什么|区别在哪)[？?。]?$|(?:死锁|虚函数|多态|智能指针|三次握手|四次挥手|进程|线程|协程|互斥锁|自旋锁|内存泄漏|栈和堆|大小端|volatile|static|const).*(?:什么|区别|原理|实现|条件|作用|写代码|写一个)/i.test(q) ||
+    /^(?:what\s+is\s+(?:a|an|the)\s+[a-z0-9_+#+-]{2,25}|(?:what\s+is\s+the\s+)?difference\s+between\s+[a-z0-9_+#+\s-]{2,30}\s+and\s+[a-z0-9_+#+\s-]{2,30})\s*[?.]?$/i.test(q);
 }
 export function projectAliases(name:string):string[] {
   const stripped=name.replace(/\.(?:md|pdf|txt|docx)\b/gi,' ');
@@ -38,13 +40,14 @@ export function projectAliases(name:string):string[] {
   return [...new Set([...tokens,...joinedSingleCjk,...technical,...prefixes,...(text.match(/\d{4,}/g)||[])].map(normal))].filter(x=>!generic.has(x)&&x.length>=2);
 }
 export function isProjectFollowUp(q:string) {
-  const trimmed=q.normalize('NFKC').trim().replace(/^(?:嗯+|呃+|啊+|哦+|噢+|好(?:的)?|行|对(?:的)?|是的|ok|okay|哎|诶|所以|还有|另外)[\s，,。！？!?、]*/gi,'');
-  return /^(?:那|然后|最后|结果|效果|具体|当时|刚才|你刚才|换个|另一个|这个|该|它|这|这块|那块|这里|里面|怎么定位|怎么验证|怎么确认|怎么解决|怎么优化|怎么实现|为什么|为啥|帧率|延迟|延时|耗时|内存|带宽|功耗|体积|大小|精度|准确率|召回率|置信度|一致性|校准集|瓶颈|难点|挑战|亮点|(?:QNN|SNPE|TFLite|CMA|NPU|RGA|MPP|V4L2|ALSA|AEC|VAD|ASR|TTS|RKNN).*(?:具体|当时|你|做|用|多少|结果|瓶颈|怎么|为什么))/i.test(trimmed);
+  const trimmed=q.normalize('NFKC').trim().replace(/^(?:嗯+|呃+|啊+|哦+|噢+|好(?:的)?|行|对(?:的)?|是的|ok|okay|well|so|and|right|哎|诶|所以|还有|另外)[\s，,。！？!?、]*/gi,'');
+  return /^(?:那|然后|最后|结果|效果|具体|当时|刚才|你刚才|换个|另一个|这个|该|它|这|这块|那块|这里|里面|怎么定位|怎么验证|怎么确认|怎么解决|怎么优化|怎么实现|为什么|为啥|帧率|延迟|延时|耗时|内存|带宽|功耗|体积|大小|精度|准确率|召回率|置信度|一致性|校准集|瓶颈|难点|挑战|亮点|(?:QNN|SNPE|TFLite|CMA|NPU|RGA|MPP|V4L2|ALSA|AEC|VAD|ASR|TTS|RKNN).*(?:具体|当时|你|做|用|多少|结果|瓶颈|怎么|为什么))/i.test(trimmed) ||
+    /^(?:what\s+about\s+(?:the|its|your|this)|how\s+did\s+you\s+(?:fix|solve|debug|test|verify|optimize|measure|reduce|improve)|what\s+was\s+the\s+(?:final\s+)?(?:result|latency|fps|frame\s+rate|accuracy|root\s+cause|bottleneck|challenge)|why\s+did\s+you\s+(?:use|choose))\b/i.test(trimmed);
 }
 export function resolveProjectFocus(question:string,documents:ProjectDocument[],previous?:ProjectFocus):ProjectFocus {
   if(isIdentityOrResumeQuery(question))return {documentIds:[],name:'',reason:'个人身份与简历背景提问，优先检索简历',anchor:question};
   const q=normal(question);
-  if(/^(?:什么是|什么叫|解释一下|请解释|介绍一下)(?!你|你的|项目)/.test(question.trim())&&!/\d{4,}/.test(q))return {documentIds:[],name:'',reason:'通用概念题，不继承项目范围',anchor:question};
+  if((/^(?:什么是|什么叫|解释一下|请解释|介绍一下)(?!你|你的|项目)/.test(question.trim())||/^(?:what\s+(?:is|are)\s+(?:a|an|the)?\s*|explain\s+|difference\s+between\s+)(?!your\b|this\s+project\b)/i.test(question.trim()))&&!/\d{4,}/.test(q))return {documentIds:[],name:'',reason:'通用概念题，不继承项目范围',anchor:question};
   const projectDocs=documents.filter(doc=>!isResumeDocument(doc));
   const scored=projectDocs.map(doc=>{
     const aliases=projectAliases(doc.fileName+' '+(doc.headings||[]).join(' '));

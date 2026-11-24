@@ -1,0 +1,128 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Build Windows (x64 Portable)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run core verification tests
+        run: |
+          npx tsx test/spokenAnswer.test.tsx
+          npx tsx test/projectRetrieval.test.ts
+          npx tsx test/winAppRelease.test.ts
+          npx tsx test/interviewWorkflow.test.ts
+
+      - name: Package Windows application & portable ZIP
+        run: |
+          npm run pack:win
+          npm run zip:win
+
+      - name: Verify packaged Windows helper & artifacts
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "release/win-unpacked/傻逼面试.exe")) { throw "Missing 傻逼面试.exe" }
+          if (-not (Test-Path "release/win-unpacked/resources/app/resources/system-audio.exe")) { throw "Missing compiled WASAPI system-audio.exe" }
+          Get-ChildItem release/ShaBiMianShi-*-win-*-portable.zip* | Format-Table Name, Length
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-portable
+          path: |
+            release/ShaBiMianShi-*-win-*-portable.zip
+            release/ShaBiMianShi-*-win-*-portable.zip.sha256
+          if-no-files-found: error
+
+  build-macos:
+    name: Build macOS (Apple Silicon DMG)
+    runs-on: macos-14
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run core verification tests
+        run: |
+          npx tsx test/spokenAnswer.test.tsx
+          npx tsx test/projectRetrieval.test.ts
+          npx tsx test/macAppRelease.test.ts
+          npx tsx test/interviewWorkflow.test.ts
+
+      - name: Package macOS application & DMG
+        run: |
+          npm run pack:mac
+          npm run dmg
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-arm64-dmg
+          path: |
+            release/ShaBiMianShi-*-mac-arm64.dmg
+            release/ShaBiMianShi-*-mac-arm64.dmg.sha256
+          if-no-files-found: error
+
+  publish-release:
+    name: Publish GitHub Release
+    needs: [build-windows, build-macos]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download built release assets
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Inspect assets & checksums
+        run: |
+          ls -lh release-assets
+          cat release-assets/*.sha256
+
+      - name: Create or update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: 傻逼面试 ${{ github.ref_name }}
+          files: release-assets/*
+          generate_release_notes: true
+          body: |
+            ## 安装包下载
+
+            - **Windows 10 / 11（64位免安装便携版）**：下载 `ShaBiMianShi-*-win-x64-portable.zip`，**完整解压到任意目录后**双击 `傻逼面试.exe` 运行（首次启动如遇 SmartScreen 提示“Windows 已保护你的电脑”，点击 **更多信息 → 仍要运行**）。
+            - **macOS Apple Silicon（M 系列芯片）**：下载 `ShaBiMianShi-*-mac-arm64.dmg`，将 **傻逼面试.app** 拖入 `Applications` 后打开（首次启动如遇系统拦截，前往 **系统设置 → 隐私与安全性 → 仍要打开**）。
+
+            ## 本版本核心更新
+
+            - **本场目标岗位与 JD 视角对齐 + 单份简历隔离**：新建/编辑面试支持设定目标岗位、粘贴 JD 并精确勾选本场生效的单份简历或项目资料，防多简历串台，自动按目标岗位迁移叙事重心。
+            - **英文问答极简初中口语模式 + 中文小抄**：遇到英文提问或要求英文作答时，自动输出易读易念的初中英语短句（禁用生僻高级大词），并在底部附带中文大意；截图代码题默认保持中文讲思路。
+            - **中英双语自动听题与跨语种检索**：语音监听（ASR）放开中英自动语种识别，支持英文提问直接检索中文简历与 `.md` 项目文档。
+            - **Windows & macOS 原生体验**：包含零外部依赖 Windows WASAPI 系统声音采集、多屏 HiDPI 无闪烁选区截图及防录屏状态持久化。

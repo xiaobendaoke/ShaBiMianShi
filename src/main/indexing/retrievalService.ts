@@ -8,6 +8,31 @@ export interface DocLookup {
   getNeighborChunk?(chunkId: string, offset: number): ChunkRecord | null;
 }
 
+const EN_ZH_RETRIEVAL_MAP: [RegExp, string][] = [
+  [/\b(?:quantiz\w*|int8|calibrat\w*)\b/i, '量化 校准'],
+  [/\b(?:challenge\w*|difficult\w*|bug\w*|issue\w*|problem\w*|bottleneck\w*|debug\w*|troubleshoot\w*|root\s+cause)\b/i, '难点 故障 排查 定位 根因 修复'],
+  [/\b(?:optimiz\w*|improve\w*|latency|delay|speed|faster|slow\w*|performance)\b/i, '优化 延迟 耗时 性能'],
+  [/\b(?:fps|frame\s*rate|throughput)\b/i, '帧率 吞吐'],
+  [/\b(?:memory|zero[\s-]?copy|buffer|bandwidth)\b/i, '内存 零拷贝 带宽'],
+  [/\b(?:accurac\w*|precision|recall|confidence|consisten\w*)\b/i, '准确率 精度 召回率 置信度 一致性'],
+  [/\b(?:audio|voice|speech|wake\w*|asr|tts)\b/i, '语音 音频 唤醒'],
+  [/\b(?:vision|camera|video|detect\w*|infer\w*)\b/i, '视觉 摄像头 视频 检测 推理'],
+  [/\b(?:sms|message|text\s+classif\w*)\b/i, '短信 分类'],
+  [/\b(?:intern|internship)\b/i, '实习'],
+  [/\b(?:education|university|college|school|master|bachelor|degree|major)\b/i, '教育 学校 硕士 本科 专业'],
+  [/\b(?:paper\w*|publication\w*|journal|research)\b/i, '论文 研究'],
+  [/\b(?:project\w*|experience|role|responsib\w*|result\w*|outcome)\b/i, '项目 经历 负责 结果']
+];
+
+function expandBilingualQuery(query: string): string {
+  if (!/[a-zA-Z]{3,}/.test(query)) return query;
+  const extras: string[] = [];
+  for (const [pattern, zhTerms] of EN_ZH_RETRIEVAL_MAP) {
+    if (pattern.test(query)) extras.push(zhTerms);
+  }
+  return extras.length > 0 ? `${query} ${extras.join(' ')}` : query;
+}
+
 export class RetrievalService {
   private keywordIndex: KeywordIndex;
   private vectorIndex: VectorIndex;
@@ -19,8 +44,9 @@ export class RetrievalService {
     this.docLookup = docLookup;
   }
 
-  public projects(libraryIds?:string[]) {
-    const chunks=this.keywordIndex.scopedChunks(libraryIds);
+  public projects(libraryIds?:string[], allowedDocumentIds?:string[]) {
+    const allowedSet=allowedDocumentIds!==undefined?new Set(allowedDocumentIds):undefined;
+    const chunks=this.keywordIndex.scopedChunks(libraryIds).filter(c=>!allowedSet||allowedSet.has(c.documentId));
     return [...new Set(chunks.map(c=>c.documentId))].map(id=>{
       const doc=this.docLookup.getDocument(id);
       const docChunks=chunks.filter(c=>c.documentId===id).sort((a,b)=>a.ordinal-b.ordinal);
@@ -36,8 +62,9 @@ export class RetrievalService {
   ): Promise<RetrievalResult> {
     const startTime = Date.now();
 
-    // If libraryIds is explicitly provided as empty array, search scope is 0 libraries
-    if (req.libraryIds !== undefined && req.libraryIds.length === 0) {
+    // If libraryIds or allowedDocumentIds is explicitly provided as empty array, search scope is 0 items
+    if ((req.libraryIds !== undefined && req.libraryIds.length === 0) ||
+        (req.allowedDocumentIds !== undefined && req.allowedDocumentIds.length === 0)) {
       return {
         query: req.query,
         items: [],
@@ -46,27 +73,60 @@ export class RetrievalService {
       };
     }
 
+    const allowedSet = req.allowedDocumentIds !== undefined ? new Set(req.allowedDocumentIds) : undefined;
+    const explicitDocIds = req.documentIds?.length
+      ? (allowedSet ? req.documentIds.filter(id => allowedSet.has(id)) : req.documentIds)
+      : undefined;
+    if (req.documentIds?.length && explicitDocIds && explicitDocIds.length === 0) {
+      return {
+        query: req.query,
+        items: [],
+        totalCandidates: 0,
+        latencyMs: 0
+      };
+    }
+    const hasExplicitProjectFocus = !!(explicitDocIds && explicitDocIds.length > 0);
+    const effectiveDocFilter = hasExplicitProjectFocus ? explicitDocIds : (allowedSet ? [...allowedSet] : undefined);
+
     const topKCandidates = Math.max(30, req.topK ?? 8);
     const libraryIds = req.libraryIds;
     const identityQuery = isIdentityOrResumeQuery(req.query);
     const isGeneralConcept = req.intent === 'general_tech' || (
-      !req.documentIds?.length &&
+      !hasExplicitProjectFocus &&
       !identityQuery &&
-      !/你|你们|我|我们|简历|项目|实习|当时|刚才/.test(req.query) &&
-      (/(?:什么是|什么叫|解释一下|请解释)/.test(req.query) || /(?:有什么区别|的区别是什么|和.+的区别)\s*[？?]?$/m.test(req.query.trim()))
+      !/你|你们|我|我们|简历|项目|实习|当时|刚才|\b(?:your|yourself|resume|internship|in\s+this\s+project)\b/i.test(req.query) &&
+      (/(?:什么是|什么叫|解释一下|请解释)/.test(req.query) ||
+        /(?:有什么区别|的区别是什么|和.+的区别)\s*[？?]?$/m.test(req.query.trim()) ||
+        /^(?:what\s+(?:is|are)\b|explain\b|(?:what\s+is\s+the\s+)?difference\s+between\b)/i.test(req.query.trim()))
     );
+    const roleHint = [req.targetRole?.trim(), req.jobDescription?.trim().slice(0, 140)].filter(Boolean).join(' ');
     const kwQuery = identityQuery
-      ? `${req.query} 个人简历 自我介绍 候选人 工程师 技术方向 工作方向 主要职责 教育 实习`
-      : req.query;
+      ? `${req.query} 个人简历 自我介绍 候选人 工作方向 主要职责 项目经历 教育 实习 ${roleHint || '工程师 技术方向'}`.trim()
+      : isGeneralConcept
+        ? req.query
+        : expandBilingualQuery(req.query);
 
     // 1. Parallel Candidate Retrieval: Keywords + Vector
-    const kwResults = this.keywordIndex.search(kwQuery, libraryIds, topKCandidates, req.documentIds);
+    const kwResults = this.keywordIndex.search(kwQuery, libraryIds, topKCandidates, effectiveDocFilter);
+    const roleRankMap = new Map<string, number>();
+    const roleScoreMap = new Map<string, number>();
+    let maxRoleScore = 0;
+    if (roleHint && !isGeneralConcept && !hasExplicitProjectFocus) {
+      this.keywordIndex.search(roleHint, libraryIds, topKCandidates, effectiveDocFilter)
+        .forEach((r, idx) => {
+          if (r.score >= 0.45) {
+            roleRankMap.set(r.chunkId, idx + 1);
+            roleScoreMap.set(r.chunkId, r.score);
+            if (r.score > maxRoleScore) maxRoleScore = r.score;
+          }
+        });
+    }
     let vecResults: { chunkId: string; score: number }[] = [];
 
     if (queryVector && this.vectorIndex.size > 0) {
       try {
-        const allowedChunkIds = req.documentIds?.length
-          ? new Set(this.keywordIndex.scopedChunks(libraryIds).filter(c => req.documentIds!.includes(c.documentId)).map(c => c.id))
+        const allowedChunkIds = effectiveDocFilter?.length
+          ? new Set(this.keywordIndex.scopedChunks(libraryIds).filter(c => effectiveDocFilter.includes(c.documentId)).map(c => c.id))
           : undefined;
         vecResults = this.vectorIndex.search(queryVector, libraryIds, topKCandidates, allowedChunkIds);
       } catch (err) {
@@ -96,15 +156,27 @@ export class RetrievalService {
     // 3. Reciprocal Rank Fusion (RRF) with constant k=60 + .md primary authority weighting
     const k = 60;
     const allChunkIds = new Set<string>([...kwRankMap.keys(), ...vecRankMap.keys()]);
-    if (identityQuery && !req.documentIds?.length) {
+    const openPersonalExperienceQuery = !hasExplicitProjectFocus && !isGeneralConcept &&
+      (identityQuery || /你|你们|我|我们|简历|项目|经历|实习|工作|负责|做过|案例|优势|成果|难点|挑战|\b(?:your\s+(?:project|projects|experience|internship|role|work|resume)|in\s+your\s+project|biggest\s+challenge|challenge\s+you|bug\s+you|problem\s+you)\b/i.test(req.query));
+    if (openPersonalExperienceQuery && roleRankMap.size > 0 && allChunkIds.size < 4) {
+      for (const [cid, rank] of roleRankMap) {
+        if (rank <= 6) allChunkIds.add(cid);
+      }
+    }
+    if ((identityQuery || (openPersonalExperienceQuery && allChunkIds.size === 0)) && !hasExplicitProjectFocus) {
       const perResumeCount = new Map<string, number>();
-      const resumeChunks = this.keywordIndex.scopedChunks(libraryIds)
-        .filter(c => {
-          const d = this.docLookup.getDocument(c.documentId);
-          return isResumeDocument({ fileName: d?.fileName || c.documentId, fileType: d?.fileType });
-        })
+      const scopedAll = this.keywordIndex.scopedChunks(libraryIds)
+        .filter(c => !allowedSet || allowedSet.has(c.documentId))
         .sort((a, b) => a.ordinal - b.ordinal);
-      for (const rc of resumeChunks) {
+      const resumeChunks = scopedAll.filter(c => {
+        const d = this.docLookup.getDocument(c.documentId);
+        return isResumeDocument({ fileName: d?.fileName || c.documentId, fileType: d?.fileType });
+      });
+      const fallbackPool = resumeChunks.length > 0 ? resumeChunks : (allowedSet ? scopedAll.filter(c => {
+        const d = this.docLookup.getDocument(c.documentId);
+        return !/真题|题库|考点|八股/.test(d?.fileName || '');
+      }) : []);
+      for (const rc of fallbackPool) {
         const seenForDoc = perResumeCount.get(rc.documentId) || 0;
         if (seenForDoc < 3) {
           allChunkIds.add(rc.id);
@@ -114,7 +186,7 @@ export class RetrievalService {
     }
 
     const fusedItems: RetrievalResultItem[] = [];
-    const resumeIntent = identityQuery || /自我介绍|个人介绍|教育|学校|大学|本科|硕士|学院|专业|论文|期刊|实习|兵装|深蓝|procise|bootloader|jetson|stm32|knn[\s_\-]?ddpg/i.test(req.query);
+    const resumeIntent = identityQuery || /自我介绍|个人介绍|教育|学校|大学|本科|硕士|学院|专业|论文|期刊|实习|兵装|深蓝|procise|bootloader|jetson|stm32|knn[\s_\-]?ddpg|\b(?:resume|education|university|college|master|bachelor|paper|publication|internship)\b/i.test(req.query);
     const hasMdKeywordHit = [...kwRankMap.keys()].some(cid => {
       const ch = this.keywordIndex.getChunk(cid);
       const d = ch ? this.docLookup.getDocument(ch.documentId) : null;
@@ -123,7 +195,9 @@ export class RetrievalService {
 
     for (const chunkId of allChunkIds) {
       const chunk = this.keywordIndex.getChunk(chunkId);
-      if (!chunk || !this.keywordIndex.inScope(chunkId,libraryIds) || (req.documentIds?.length&&!req.documentIds.includes(chunk.documentId))) continue;
+      if (!chunk || !this.keywordIndex.inScope(chunkId,libraryIds) ||
+          (allowedSet && !allowedSet.has(chunk.documentId)) ||
+          (hasExplicitProjectFocus && !explicitDocIds!.includes(chunk.documentId))) continue;
 
       const doc = this.docLookup.getDocument(chunk.documentId);
       const fileName = doc?.fileName || '未知文档';
@@ -135,15 +209,16 @@ export class RetrievalService {
       const kwRank = kwRankMap.get(chunkId);
       const vecRank = vecRankMap.get(chunkId);
       const vecScore = vecScoreMap.get(chunkId) || 0;
+      const roleRank = roleRankMap.get(chunkId);
 
       // Open-scope vector noise guard: prevent low-similarity vector hits from injecting unrelated project chunks
-      if (!req.documentIds?.length && !kwRank && !(identityQuery && isResumeDoc)) {
+      if (!hasExplicitProjectFocus && !kwRank && !roleRank && !(identityQuery && (isResumeDoc || !!allowedSet)) && !(openPersonalExperienceQuery && isResumeDoc)) {
         const minVec = kwResults.length === 0 ? 0.46 : 0.35;
         if (vecScore < minVec) continue;
       }
 
       // General concept guard: prevent single incidental word overlap (e.g. "线程", "UDP") from pulling personal project docs
-      if (!req.documentIds?.length && isGeneralConcept && !isQuestionBank) {
+      if (!hasExplicitProjectFocus && isGeneralConcept && !isQuestionBank) {
         const matchedTerms = kwMatchedMap.get(chunkId) || 0;
         const queryTerms = kwQueryTerms || 1;
         const hasVectors = !!(queryVector && this.vectorIndex.size > 0);
@@ -153,12 +228,16 @@ export class RetrievalService {
 
       const rrfKw = kwRank ? 1.0 / (k + kwRank) : 0;
       const rrfVec = vecRank ? 1.0 / (k + vecRank) : 0;
+      const roleScore = roleScoreMap.get(chunkId) || 0;
+      const rrfRole = roleScore > 0 && maxRoleScore > 0 && !isGeneralConcept
+        ? 0.018 * (roleScore / maxRoleScore)
+        : 0;
       const section=caseSection(chunk.sectionPath);
-      const caseIntent=/坑|卡在哪|定位|排查|故障|异常|量化|校准|怎么确认|效果|结果|最后/.test(req.query);
+      const caseIntent=/坑|卡在哪|定位|排查|故障|异常|量化|校准|怎么确认|效果|结果|最后|\b(?:bug|issue|challenge|bottleneck|debug\w*|root\s+cause|quantiz\w*|calibrat\w*|verif\w*|result|outcome)\b/i.test(req.query);
       const authorityBoost = resumeIntent
         ? (isResumeDoc ? 0.025 + (identityQuery && chunk.ordinal <= 2 ? 0.015 : 0) : 0)
         : (isMd ? 0.006 : (isPdf && hasMdKeywordHit ? -0.003 : 0));
-      const rrfScore = rrfKw + rrfVec + authorityBoost + (section&&caseIntent?0.04:0) + (req.focusSection&&section===req.focusSection?0.1:0);
+      const rrfScore = rrfKw + rrfVec + rrfRole + authorityBoost + (section&&caseIntent?0.04:0) + (req.focusSection&&section===req.focusSection?0.1:0);
 
       fusedItems.push({
         chunkId,
@@ -182,10 +261,10 @@ export class RetrievalService {
     // Build seeds: when multiple target documents are explicitly requested, ensure balanced round-robin coverage
     const targetCap = Math.max(1, req.topK ?? 8);
     let seeds: RetrievalResultItem[];
-    const multiDocRequest = !!(req.documentIds && req.documentIds.length > 1);
+    const multiDocRequest = hasExplicitProjectFocus && explicitDocIds!.length > 1;
     if (multiDocRequest) {
       const byDoc = new Map<string, RetrievalResultItem[]>();
-      for (const docId of req.documentIds!) byDoc.set(docId, []);
+      for (const docId of explicitDocIds!) byDoc.set(docId, []);
       for (const item of fusedItems) {
         if (!byDoc.has(item.documentId)) byDoc.set(item.documentId, []);
         byDoc.get(item.documentId)!.push(item);
@@ -200,7 +279,7 @@ export class RetrievalService {
           }
         }
       }
-      const cap = Math.max(targetCap, req.documentIds!.length * 2);
+      const cap = Math.max(targetCap, explicitDocIds!.length * 2);
       for (const item of fusedItems) {
         if (interleaved.length >= cap) break;
         if (!pickedIds.has(item.chunkId)) {

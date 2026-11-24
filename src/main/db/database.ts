@@ -356,7 +356,17 @@ export class AppDatabase {
   }
 
   public deleteDocument(id: string) {
-    this.db.prepare(`DELETE FROM documents WHERE id = ?`).run(id);
+    this.db.transaction(() => {
+      this.db.prepare(`DELETE FROM documents WHERE id = ?`).run(id);
+      const sessions = this.getSessions();
+      for (const s of sessions) {
+        if (s.documentIds && s.documentIds.includes(id)) {
+          s.documentIds = s.documentIds.filter(did => did !== id);
+          s.updatedAt = Date.now();
+          this.saveSession(s);
+        }
+      }
+    })();
   }
 
   // --- Chunk Ops ---
@@ -718,6 +728,12 @@ export class AppDatabase {
   public saveSession(s: SessionRecord) {
     const existing = this.db.prepare('SELECT metadata_json FROM sessions WHERE id = ?').get(s.id) as {metadata_json: string} | undefined;
     const previous = JSON.parse(existing?.metadata_json || '{}');
+    const documentIds = 'documentIds' in s ? s.documentIds : previous.documentIds;
+    const targetRole = 'targetRole' in s ? s.targetRole : previous.targetRole;
+    const jobDescription = 'jobDescription' in s ? s.jobDescription : previous.jobDescription;
+    const projectFacts = 'projectFacts' in s ? s.projectFacts : previous.projectFacts;
+    const summary = 'summary' in s ? s.summary : previous.summary;
+    const thinkingMode = 'thinkingMode' in s ? s.thinkingMode : previous.thinkingMode;
     this.db.prepare(`
       INSERT INTO sessions (id, title, library_ids_json, strategy, prompt_style, created_at, updated_at, metadata_json)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -729,11 +745,13 @@ export class AppDatabase {
         metadata_json = excluded.metadata_json,
         updated_at = excluded.updated_at
     `).run(s.id, s.title, JSON.stringify(s.libraryIds), s.strategy, s.promptStyle, s.createdAt, s.updatedAt, JSON.stringify({
-      language: s.language || 'C17',
-      thinkingMode: s.thinkingMode ?? previous.thinkingMode,
-      summary: s.summary ?? previous.summary,
-      projectFacts: s.projectFacts ?? previous.projectFacts,
-      jobDescription: s.jobDescription ?? previous.jobDescription
+      language: s.language || previous.language || 'C17',
+      thinkingMode,
+      summary,
+      projectFacts,
+      targetRole,
+      jobDescription,
+      documentIds
     }));
   }
 

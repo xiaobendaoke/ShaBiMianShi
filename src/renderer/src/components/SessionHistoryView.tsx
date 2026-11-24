@@ -65,7 +65,9 @@ export const SessionHistoryView: React.FC<SessionHistoryViewProps> = ({
               <div key={s.id} className={cx('group relative rounded-lg transition-colors', isSelected ? 'bg-accent-soft' : 'hover:bg-fill')}>
                 <button onClick={() => setSelectedSessionId(s.id)} className="w-full text-left pl-3 pr-9 py-2">
                   <div className={cx('truncate text-[13px] text-label', isSelected && 'font-medium')}>{s.title}</div>
-                  <div className="mt-0.5 text-[11px] text-label-3 flex items-center gap-1.5">
+                  <div className="mt-0.5 text-[11px] text-label-3 flex items-center gap-1.5 truncate">
+                    {s.targetRole?.trim() && <span className="text-accent-text font-medium truncate max-w-[100px]">{s.targetRole.trim()}</span>}
+                    {s.targetRole?.trim() && <span>·</span>}
                     <span>{new Date(s.createdAt).toLocaleDateString()}</span>
                     {currentSession?.id === s.id && <span className="text-accent-text">· 当前</span>}
                   </div>
@@ -84,7 +86,7 @@ export const SessionHistoryView: React.FC<SessionHistoryViewProps> = ({
         <Toolbar />
         <div className="flex-1 overflow-y-auto">
           <div className="max-w-[780px] mx-auto px-10 pt-9 pb-14">
-            <PageHeader title={selected?.title || '会话详情'} subtitle={`历史问答轮次与引用快照存档${turns.length ? ` · 共 ${turns.length} 题` : ''}`}>
+            <PageHeader title={selected?.title || '会话详情'} subtitle={`历史问答轮次与引用快照存档${selected?.targetRole?.trim() ? ` · 目标岗位：${selected.targetRole.trim()}` : ''}${turns.length ? ` · 共 ${turns.length} 题` : ''}`}>
               {selected && (
                 <button onClick={() => onSelectSession(selected)} className={button.primary}>
                   <span>载入至当前面试辅导</span>

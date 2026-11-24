@@ -85,6 +85,9 @@ export interface RetrievalQuery {
   keywordWeight?: number;
   vectorWeight?: number;
   documentIds?: string[];
+  allowedDocumentIds?: string[];
+  targetRole?: string;
+  jobDescription?: string;
   focusSection?: string;
   maxContextChars?: number;
   intent?: 'project_or_resume' | 'general_tech' | 'chatter';
@@ -128,6 +131,8 @@ export interface SessionRecord {
   id: string;
   title: string;
   libraryIds: string[];
+  documentIds?: string[];
+  targetRole?: string;
   strategy: AnsweringStrategy;
   promptStyle: PromptStyle;
   thinkingMode?: ThinkingMode;
@@ -186,6 +191,8 @@ export interface AnswerOptions {
   deepThinking?: boolean;
   thinkingMode?: ThinkingMode;
   audioTiming?: {voiceEndedAt: number; submittedAt: number};
+  targetRole?: string;
+  jobDescription?: string;
 }
 export type AudioSource = 'system' | 'microphone';
 export interface TranscriptRecord {

@@ -186,7 +186,34 @@ await test('候选人口吻、题型预算、代码独立预算、去重与应�
   assert.deepEqual(explicitThinkingDecision('auto', {images:[{id:'x',base64:'x',mimeType:'image/png'}]}, calcImgQ), {mode:'fast', source:'action'});
   assert.ok(!answerPolicy('什么是事务','standard').prompt.includes('STAR'));
   assert.equal(mergeTranscript('数据库索引为什么','索引为什么能加快查询'),'数据库索引为什么能加快查询');
+  assert.equal(mergeTranscript('Can you tell me','Tell me about your project?'),'Can you tell me about your project?');
+  assert.equal(mergeTranscript('Hello.','What is your role?'),'Hello. What is your role?');
   assert.equal(isQuestion('嗯，好的，谢谢。'),false);
+
+  // Role alignment & narrative reframing policy tests
+  const salesPolicy = answerPolicy('介绍一下你自己，讲讲你做过的销售软件项目', 'standard', {
+    targetRole: '销售',
+    jobDescription: '负责企业级SaaS软件客户开发与签单回款'
+  });
+  assert.equal(salesPolicy.coding, false);
+  assert.equal(salesPolicy.project, true);
+  assert.match(salesPolicy.prompt, /【本场目标岗位：销售】/);
+  assert.match(salesPolicy.prompt, /重心迁移/);
+  assert.match(salesPolicy.prompt, /严禁为了迎合「销售」编造未做过的工作/);
+
+  // Non-coding targetRole screenshot should NOT force C17 code template unless question asks for code
+  const salesImgPolicy = answerPolicy('请结合本场目标岗位（销售）解答截图中的题目', 'standard', {
+    images: [{id: 'img1', base64: 'x', mimeType: 'image/png'}],
+    targetRole: '销售'
+  });
+  assert.equal(salesImgPolicy.coding, false, 'Sales role screenshot must not force C17 coding mode');
+  assert.match(salesImgPolicy.prompt, /销售/);
+
+  const techImgPolicy = answerPolicy('请解答截图中的题目', 'standard', {
+    images: [{id: 'img2', base64: 'x', mimeType: 'image/png'}],
+    targetRole: '后端开发'
+  });
+  assert.equal(techImgPolicy.coding, true, 'Tech role screenshot keeps full coding mode');
 });
 await test('无证据防编造系统护栏与首字5字符快速上屏', async () => {
   const saved = globalThis.fetch;
@@ -218,6 +245,24 @@ await test('无证据防编造系统护栏与首字5字符快速上屏', async (
     assert.match(bodies[0].messages[0].content, /0 条命中/);
     assert.match(bodies[0].messages[0].content, /严禁猜测或编造任何职位方向/);
     assert.ok(tokenAtChunk.length >= 2, 'First token should flush well before waiting for 16 chars');
+  } finally {
+    globalThis.fetch = saved;
+  }
+});
+await test('ASR自动语种识别不锁死zh且保留中英文术语提示词', async () => {
+  const saved = globalThis.fetch;
+  let capturedForm: FormData | undefined;
+  globalThis.fetch = async (_url, init) => {
+    capturedForm = init?.body as FormData;
+    return new Response(JSON.stringify({text: 'Can you introduce yourself?'}), {headers: {'content-type': 'application/json'}});
+  };
+  try {
+    const svc = new ProviderService({getKey: () => 'k'} as any);
+    const prof = {id: 'p', modelAsr: 'whisper-1', baseUrl: 'https://fixture.invalid/v1', timeoutMs: 2000} as ProviderProfile;
+    const text = await svc.transcribeAudio(prof, Buffer.from('RIFF'), 'audio/wav', undefined, '嵌入式软件');
+    assert.equal(text, 'Can you introduce yourself?');
+    assert.equal(capturedForm?.get('language'), null, 'ASR must not hard-lock language=zh so English questions transcribe cleanly');
+    assert.match(String(capturedForm?.get('prompt') || ''), /Chinese & English/);
   } finally {
     globalThis.fetch = saved;
   }

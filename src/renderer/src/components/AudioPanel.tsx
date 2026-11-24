@@ -4,7 +4,7 @@ import type { TranscriptRecord } from '../../../main/types';
 import { AudioCapture } from '../services/audioCapture';
 import { Notice, button, cx, formatShortcut, isMacPlatform, selectField } from './ui';
 
-export function AudioPanel({ sessionId, edit }: { sessionId?: string; edit: (text: string) => void }) {
+export function AudioPanel({ sessionId, edit, onRequireSession }: { sessionId?: string; edit: (text: string) => void; onRequireSession?: () => void }) {
   const api = (window as any).api;
   const [mode, setMode] = useState('system');
   const [running, setRunning] = useState(false);
@@ -90,6 +90,10 @@ export function AudioPanel({ sessionId, edit }: { sessionId?: string; edit: (tex
 
   commands.current = command => {
     if (command === 'listen') {
+      if (!sessionId) {
+        onRequireSession?.();
+        return;
+      }
       if (!running) void start();
       else {
         setPaused(!paused);
@@ -192,7 +196,18 @@ export function AudioPanel({ sessionId, edit }: { sessionId?: string; edit: (tex
             <span className="text-[11px] opacity-70">· 停止</span>
           </button>
         ) : (
-          <button disabled={!sessionId} onClick={() => void start()} className={button.chip} title={`开启实时语音监听 (快捷键: ${formatShortcut('Cmd+Shift+G', 'Ctrl+Shift+G')})`}>
+          <button
+            disabled={!sessionId && !onRequireSession}
+            onClick={() => {
+              if (!sessionId) {
+                onRequireSession?.();
+                return;
+              }
+              void start();
+            }}
+            className={button.chip}
+            title={`开启实时语音监听 (快捷键: ${formatShortcut('Cmd+Shift+G', 'Ctrl+Shift+G')})`}
+          >
             <Mic size={13} />
             <span>开始监听</span>
           </button>

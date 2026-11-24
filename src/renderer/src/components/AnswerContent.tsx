@@ -38,6 +38,10 @@ export function AnswerContent({text}: {text:string}) {
     if(heading){blocks.push(<p key={blocks.length} className="font-semibold text-label text-[16px] pt-1"><Inline text={heading[1]}/></p>);i++;continue;}
     let prose=line.replace(/^>\s?/,'');i++;
     while(i<lines.length&&lines[i].trim()&&!/^\s*(?:```|#{1,6}\s|[-*+]\s|\d+[.)、]\s)/.test(lines[i]))prose+='\n'+lines[i++].replace(/^>\s?/,'');
+    if(/^\s*[（(]?中文大意[：:]/.test(prose)){
+      blocks.push(<p key={blocks.length} className="pt-2.5 border-t border-separator/70 text-[13px] leading-relaxed text-label-2 whitespace-pre-wrap"><Inline text={prose.trim()}/></p>);
+      continue;
+    }
     for(const part of paragraphs(prose))blocks.push(<p key={blocks.length} className="whitespace-pre-wrap"><Inline text={part}/></p>);
   }
   return <div className="space-y-4 text-[15px] leading-[1.75] text-label font-sans break-words min-w-0" data-answer-content>{blocks}</div>;

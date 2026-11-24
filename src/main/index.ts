@@ -336,7 +336,9 @@ async function bootstrap() {
   audioSession = new AudioSessionService((wav, signal) => {
     const profile = db.getActiveProfile('asr');
     if (!profile) throw new Error('请先配置ASR服务');
-    return providerService.transcribeAudio(profile, wav, 'audio/wav', signal);
+    const activeId = db.getSetting('active_session_id');
+    const activeRole = activeId ? db.getSessions().find(s => s.id === activeId)?.targetRole : undefined;
+    return providerService.transcribeAudio(profile, wav, 'audio/wav', signal, activeRole);
   }, (channel, value) => {
     if(channel==='audio:state'&&!value.running&&nativeCapture?.id===value.captureId){nativeSystemAudio.stop();nativeCapture=undefined;}
     windowManager.broadcast(channel, value);
@@ -567,8 +569,11 @@ function executeAskQuestion(
   windowManager.broadcast('chat:start', { turnId, sessionId, question, createdAt: turn.createdAt, turn });
   windowManager.broadcast('chat:reset', { turnId, sessionId });
   const selectedLibraries=libraryIds??session.libraryIds;
+  const allowedDocumentIds=session.documentIds!==undefined?session.documentIds:undefined;
+  const allowedDocSet=allowedDocumentIds!==undefined?new Set(allowedDocumentIds):undefined;
   const getScopedDocuments = () => new Set(db.getDocumentLibraryLinks()
-    .filter(link => selectedLibraries.includes(link.libraryId)).map(link => link.documentId));
+    .filter(link => selectedLibraries.includes(link.libraryId) && (!allowedDocSet || allowedDocSet.has(link.documentId)))
+    .map(link => link.documentId));
   let scopedDocumentIds = getScopedDocuments();
   const documentInScope = (id: string) => scopedDocumentIds.has(id);
   const completedInScope = () => db.getTurns(sessionId)
@@ -576,7 +581,7 @@ function executeAskQuestion(
     // Old answers can contain document memory with no recorded provenance.
     .map(t => t.retrieval?.contextDocumentIds ? t : {...t, answer: ''});
   const completedBefore = completedInScope();
-  const projects=retrievalService.projects(selectedLibraries);
+  const projects=retrievalService.projects(selectedLibraries, allowedDocumentIds);
   let previousFocusTurn: TurnRecord | undefined;
   let previousFocus: ReturnType<typeof resolveProjectFocus> | undefined;
   for (let i = completedBefore.length - 1; i >= Math.max(0, completedBefore.length - 4); i--) {
@@ -665,6 +670,8 @@ function executeAskQuestion(
             question,
             fromAudio: !!options.audioTiming,
             classifyThinking,
+            targetRole: session.targetRole,
+            jobDescription: session.jobDescription,
             activeProject: previousFocus?.name && !previousFocus.name.includes(' / ') ? previousFocus.name : undefined,
             documents: docCatalog,
             recentTurns: completedBefore.slice(-4).map(t => ({
@@ -730,9 +737,9 @@ function executeAskQuestion(
       const pureGeneralTech = session.strategy !== 'docs_only' &&
         (intent === 'general_tech' || focus.reason === '通用概念题，不继承项目范围') &&
         focus.documentIds.length === 0 &&
-        !/你|你们|我|我们|简历|项目|实习/.test(effectiveQuestion) &&
-        !projects.some(p => /真题|题库|考点|八股/.test(p.fileName));
-      const shouldRetrieve = selectedLibraries.length > 0 && !options.images?.length && intent !== 'chatter' && !pureGeneralTech;
+        !/你|你们|我|我们|简历|项目|实习|\b(?:your|yourself|resume|project|projects|internship)\b/i.test(effectiveQuestion) &&
+        !projects.some(p => /真题|题库|考点|八股|话术|面经/.test(p.fileName));
+      const shouldRetrieve = selectedLibraries.length > 0 && (allowedDocumentIds === undefined || allowedDocumentIds.length > 0) && !options.images?.length && intent !== 'chatter' && !pureGeneralTech;
       const targetLibraries = shouldRetrieve ? selectedLibraries : [];
 
       let qVec: number[] | undefined;
@@ -761,7 +768,8 @@ function executeAskQuestion(
         }
       }
       if (controller.signal.aborted || settled) return;
-      const retrieval = await retrievalService.retrieve({query:searchQuery,libraryIds:targetLibraries,topK:8,documentIds:focus.documentIds,intent,
+      const retrieval = await retrievalService.retrieve({query:searchQuery,libraryIds:targetLibraries,topK:8,documentIds:focus.documentIds,
+        allowedDocumentIds,targetRole:session.targetRole,jobDescription:session.jobDescription,intent,
         focusSection:continuing&&!/换个|另一个|其他/.test(effectiveQuestion)?previousFocusTurn?.retrieval?.caseSection:undefined},qVec);
       turn.retrieval={...focus,rewrittenQuestion:effectiveQuestion!==question?effectiveQuestion:undefined,searchQuery,intent,caseSection:retrieval.items.map(i=>caseSection(i.sectionPath)).find(Boolean),omitted:retrieval.omitted||[],items:retrieval.items.map(i=>({chunkId:i.chunkId,fileName:i.fileName,sectionPath:i.sectionPath,chars:i.text.length}))};
       if (controller.signal.aborted || settled) return;
@@ -781,7 +789,10 @@ function executeAskQuestion(
       memory={...memory,entries:memory.entries.filter(e=>e.source.type!=='document'||!!db.getChunk(e.source.id))};
       const scopedEntries = memory.entries.filter(entry => {
         const source = entry.source;
-        if (source.type === 'document') return keywordIndex.inScope(source.id, selectedLibraries);
+        if (source.type === 'document') {
+          const ch = keywordIndex.getChunk(source.id);
+          return keywordIndex.inScope(source.id, selectedLibraries) && (!!ch && documentInScope(ch.documentId));
+        }
         if (source.type === 'assistant') return source.documentIds?.every(documentInScope) ?? false;
         return true;
       });
@@ -823,7 +834,8 @@ function executeAskQuestion(
       ])];
       turn.retrieval!.contextDocumentIds = contextDocumentIds;
       const rewriteNote = effectiveQuestion !== question ? `\n面试官语音原句：${question}\n上下文补全后语义：${effectiveQuestion}` : '';
-      const history=[{role:'system',content:`检索范围判断：${focus.reason}。若只给了平台名且存在多个不同项目，请先用一句话澄清具体项目；跨项目比较时分别说明，禁止拼成一个人的同一次实施。${rewriteNote}\n`+memoryContext(scopedMemory,effectiveQuestion,focus.documentIds,singleFocusName||undefined)+`\n用户填写的项目事实：${session.projectFacts||'未提供'}\n目标职位：${session.jobDescription||'未提供'}\n近期问答（回答草稿用于保持上下文连贯，具体参数严格以参考资料为准）：${JSON.stringify(recentContext(contextTurns,true))}`}];
+      const roleLine = `\n本场目标岗位：${session.targetRole?.trim() || '未指定'}\n职位描述(JD)：${session.jobDescription?.trim() || '未提供'}`;
+      const history=[{role:'system',content:`检索范围判断：${focus.reason}。若只给了平台名且存在多个不同项目，请先用一句话澄清具体项目；跨项目比较时分别说明，禁止拼成一个人的同一次实施。${rewriteNote}\n`+memoryContext(scopedMemory,effectiveQuestion,focus.documentIds,singleFocusName||undefined)+`\n用户填写的项目事实：${session.projectFacts||'未提供'}${roleLine}\n近期问答（回答草稿用于保持上下文连贯，具体参数严格以参考资料为准）：${JSON.stringify(recentContext(contextTurns,true))}`}];
       turn.timings!.retrievalMs=Date.now()-turn.timings!.startedAt;
       if (routing) thinking = await routing;
       if (controller.signal.aborted || settled) return;
@@ -884,8 +896,12 @@ function executeAskQuestion(
 
         }
       }, session.promptStyle, controller.signal, {
-        ...options, language: options.language || session.language || 'C17',
-        deepThinking: decision?.mode === 'deep', reasoningEffort
+        ...options,
+        language: options.language || session.language || 'C17',
+        targetRole: options.targetRole ?? session.targetRole,
+        jobDescription: options.jobDescription ?? session.jobDescription,
+        deepThinking: decision?.mode === 'deep',
+        reasoningEffort
       });
     } catch (error) {
       finishError(error instanceof Error ? error : new Error(String(error)));
@@ -904,7 +920,12 @@ async function handleCaptureAndAsk(mode: 'interactive' | 'fullscreen' = 'interac
   if (db.getSetting('active_session_id') !== sessionId) throw new Error('会话已切换，请重新截图');
   const image = {...captureRes, id: crypto.randomUUID()};
   windowManager.broadcast('screen:preview', {sessionId, image});
-  const question = '请解答截图中的题目；若是代码题，先用候选人口吻讲解法思路，再给完整可运行代码，最后简述复杂度。遵循题目约束，不要先复述输入输出和约束清单。';
+  const activeSession = db.getSessions().find(s => s.id === sessionId);
+  const targetRole = activeSession?.targetRole?.trim();
+  const isNonTechRole = !!targetRole && !/(?:开发|研发|工程|算法|架构|程序|代码|前端|后端|全栈|测试|运维|嵌入|客户端|安全|数据工程|c\+\+|java|python|golang|rust|swe|sde|dev)/i.test(targetRole);
+  const question = isNonTechRole
+    ? `请结合本场目标岗位（${targetRole}）解答截图中的题目；若确为编程代码题，再按候选人口吻先讲思路并给出完整可运行代码。`
+    : '请解答截图中的题目；若是代码题，先用候选人口吻讲解法思路，再给完整可运行代码，最后简述复杂度。遵循题目约束，不要先复述输入输出和约束清单。';
   return {question, turnId: submitQuestion(sessionId, question, targetLibraryIds, undefined, {images:[image], imageOnly:true})};
 }
 

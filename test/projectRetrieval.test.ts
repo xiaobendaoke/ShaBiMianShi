@@ -5,8 +5,12 @@ import {VectorIndex} from '../src/main/indexing/vectorIndex';
 import {RetrievalService} from '../src/main/indexing/retrievalService';
 import {resolveProjectFocus,caseSection,answeredCase,isIdentityOrResumeQuery} from '../src/main/services/projectFocus';
 import {selectedProject,recentContext} from '../src/main/services/sessionMemory';
-import {parseCompletionResponse} from '../src/main/services/queryCompletion';
+import {buildCompletionMessages,parseCompletionResponse} from '../src/main/services/queryCompletion';
 import {parseMarkdown} from '../src/main/parsers/mdParser';
+import {AppDatabase} from '../src/main/db/database';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import type {ChunkRecord} from '../src/main/types';
 const docs=[{id:'sms',fileName:'8295 车载座舱离线短信分类.md'},{id:'vision',fileName:'RK3588 YOLOv11n.md'},{id:'audio',fileName:'RK3588 语音全链路.md'},{id:'other',fileName:'attention mappo.md'}];
 assert.equal(answeredCase('我处理的是INT8量化校准问题',[{sectionPath:'项目 > 案例一：缓存 > 根因',text:'FastRPC缓存一致性问题',documentId:'s'},{sectionPath:'项目 > 案例二：量化 > 根因',text:'INT8量化校准代表集偏差',documentId:'s'}]),'项目 > 案例二：量化');
@@ -123,6 +127,172 @@ const scrubbed=recentContext([
 assert.ok(!scrubbed[0].draft!.includes('99ms'),'Unverified 99ms metric must be scrubbed from historical draft');
 assert.ok(scrubbed[0].draft!.includes('17ms'),'Citation-verified 17ms stays intact');
 assert.ok(scrubbed[0].draft!.includes('SECRET_DRAFT_37'),'Non-metric scope tokens stay intact');
+
+// Regression: Session targetRole, jobDescription, single-resume hard isolation (allowedDocumentIds), and cross-role chunk ranking
+assert.ok(isIdentityOrResumeQuery('你为什么想转岗做产品经理？'));
+assert.ok(isIdentityOrResumeQuery('你觉得你应聘销售岗位的优势是什么？'));
+assert.equal(isIdentityOrResumeQuery('为什么做数据库读写分离？'), false, 'Technical why-question must never trigger identity query');
+
+const pmCompletionMsgs = buildCompletionMessages({
+  question: '聊聊你的核心优势',
+  fromAudio: true,
+  targetRole: '产品经理',
+  jobDescription: '负责B端CRM需求调研、PRD撰写与迭代上线',
+  recentTurns: [],
+  documents: [{id: 'sales_sw_resume', fileName: '销售软件个人简历.pdf', kind: 'pdf'}]
+});
+assert.match(pmCompletionMsgs[1].content, /本场目标岗位：产品经理/);
+assert.match(pmCompletionMsgs[1].content, /岗位要求摘要：负责B端CRM需求调研/);
+const pmCompletionParsed = parseCompletionResponse(
+  JSON.stringify({intent: 'project_or_resume', rewrittenQuestion: '聊聊你的核心优势', searchQuery: '核心优势', targetDocIds: []}),
+  '聊聊你的核心优势',
+  new Set(['sales_sw_resume']),
+  '产品经理'
+);
+assert.match(pmCompletionParsed.searchQuery, /产品经理/, 'Identity/strength completion dynamically injects targetRole');
+
+const crossRoleDocs = [
+  {id: 'sales_sw_resume', fileName: '候选人_CRM销售软件经历.pdf', fileType: 'pdf' as const},
+  {id: 'other_cpp_resume', fileName: '另一份_嵌入式C++简历.pdf', fileType: 'pdf' as const}
+];
+const crossIdx = new KeywordIndex();
+crossIdx.addChunk({
+  id: 'sw_sales_c1', documentId: 'sales_sw_resume', documentVersion: 1, libraryId: 'shared_lib', ordinal: 1,
+  sectionPath: '第 1 页 > 商务拓展',
+  text: '负责CRM销售软件大客户开拓、客户痛点挖掘、报价异议处理与年度回款成交转化，签约额提升35%。',
+  pageStart: 1, pageEnd: 1, sourceStart: 0, sourceEnd: 60, tokenEstimate: 35, contentHash: 'cs1', createdAt: 0
+}, ['shared_lib'], crossRoleDocs[0].fileName);
+crossIdx.addChunk({
+  id: 'sw_pm_c2', documentId: 'sales_sw_resume', documentVersion: 1, libraryId: 'shared_lib', ordinal: 2,
+  sectionPath: '第 1 页 > 产品迭代',
+  text: '主导客户需求调研与业务流程抽象，输出PRD需求文档并协同推动线索漏斗模块功能迭代，留存率提升18%。',
+  pageStart: 1, pageEnd: 1, sourceStart: 61, sourceEnd: 120, tokenEstimate: 35, contentHash: 'cs2', createdAt: 0
+}, ['shared_lib'], crossRoleDocs[0].fileName);
+crossIdx.addChunk({
+  id: 'sw_tech_c3', documentId: 'sales_sw_resume', documentVersion: 1, libraryId: 'shared_lib', ordinal: 3,
+  sectionPath: '第 2 页 > 技术实现',
+  text: '参与CRM后端接口开发、SQL慢查询优化与Webhook异步队列排障，接口P99延迟降低50%。',
+  pageStart: 2, pageEnd: 2, sourceStart: 121, sourceEnd: 180, tokenEstimate: 35, contentHash: 'cs3', createdAt: 0
+}, ['shared_lib'], crossRoleDocs[0].fileName);
+crossIdx.addChunk({
+  id: 'other_cpp_c1', documentId: 'other_cpp_resume', documentVersion: 1, libraryId: 'shared_lib', ordinal: 1,
+  sectionPath: '第 1 页',
+  text: '负责STM32电机控制与CAN总线驱动开发，不应出现在仅勾选CRM销售软件简历的会话中。',
+  pageStart: 1, pageEnd: 1, sourceStart: 0, sourceEnd: 50, tokenEstimate: 30, contentHash: 'oc1', createdAt: 0
+}, ['shared_lib'], crossRoleDocs[1].fileName);
+const crossService = new RetrievalService(crossIdx, new VectorIndex(), {
+  getDocument: id => crossRoleDocs.find(d => d.id === id) as any
+});
+
+// 1) Hard isolation: picking only 'sales_sw_resume' in shared_lib never leaks 'other_cpp_resume'
+const isolatedSelfIntro = await crossService.retrieve({
+  query: '先做个自我介绍',
+  libraryIds: ['shared_lib'],
+  allowedDocumentIds: ['sales_sw_resume'],
+  targetRole: '销售'
+});
+assert.ok(isolatedSelfIntro.items.length > 0, 'Bound resume must be recalled on self-intro');
+assert.ok(isolatedSelfIntro.items.every(i => i.documentId === 'sales_sw_resume'), 'Unchecked resume in same library must have 0 leakage');
+assert.equal((await crossService.retrieve({
+  query: '先做个自我介绍',
+  libraryIds: ['shared_lib'],
+  allowedDocumentIds: []
+})).items.length, 0, 'Explicit empty allowedDocumentIds must return 0 items');
+
+// 2) Same resume ('sales_sw_resume'), different targetRole shifts top-ranked evidence chunk!
+const asSales = await crossService.retrieve({
+  query: '讲讲你之前做过的项目经历',
+  libraryIds: ['shared_lib'],
+  allowedDocumentIds: ['sales_sw_resume'],
+  targetRole: '销售',
+  jobDescription: '大客户开拓、报价谈判、回款转化'
+});
+assert.equal(asSales.items[0]?.chunkId, 'sw_sales_c1', 'Sales targetRole ranks sales/conversion chunk #1');
+
+const asPm = await crossService.retrieve({
+  query: '讲讲你之前做过的项目经历',
+  libraryIds: ['shared_lib'],
+  allowedDocumentIds: ['sales_sw_resume'],
+  targetRole: '产品经理',
+  jobDescription: '需求调研、PRD文档、功能迭代与留存率'
+});
+assert.equal(asPm.items[0]?.chunkId, 'sw_pm_c2', 'PM targetRole ranks PRD/iteration chunk #1 from the same resume');
+
+const asTech = await crossService.retrieve({
+  query: '讲讲你之前做过的项目经历',
+  libraryIds: ['shared_lib'],
+  allowedDocumentIds: ['sales_sw_resume'],
+  targetRole: '后端开发',
+  jobDescription: '后端接口开发、SQL优化与异步队列排障'
+});
+assert.equal(asTech.items[0]?.chunkId, 'sw_tech_c3', 'Backend targetRole ranks API/SQL chunk #1 from the same resume');
+
+// 3) SQLite persistence of targetRole, jobDescription, documentIds, and document deletion sync
+const tmpRoleDbDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-role-db-'));
+try {
+  const roleDb = new AppDatabase(path.join(tmpRoleDbDir, 'app.db'));
+  roleDb.saveLibrary({id: 'l1', name: '简历库', description: '', docCount: 0, createdAt: 1, updatedAt: 1});
+  roleDb.saveDocument({
+    id: 'd1', fileName: '销售简历.pdf', fileType: 'pdf', fileSize: 100, fileHash: 'h1',
+    pageCount: 1, status: 'ready', errorMsg: null, needsOcr: false, storagePath: '/tmp/d1',
+    createdAt: 1, updatedAt: 1, libraryIds: ['l1']
+  });
+  roleDb.saveDocument({
+    id: 'd2', fileName: '项目复盘.md', fileType: 'md', fileSize: 100, fileHash: 'h2',
+    pageCount: null, status: 'ready', errorMsg: null, needsOcr: false, storagePath: '/tmp/d2',
+    createdAt: 1, updatedAt: 1, libraryIds: ['l1']
+  });
+  roleDb.saveSession({
+    id: 'sess_sales', title: '销售', targetRole: '销售', jobDescription: '负责SaaS销售',
+    libraryIds: ['l1'], documentIds: ['d1', 'd2'], strategy: 'docs_and_general', promptStyle: 'standard',
+    createdAt: 1, updatedAt: 1
+  });
+  let savedSess = roleDb.getSessions().find(s => s.id === 'sess_sales')!;
+  assert.equal(savedSess.targetRole, '销售');
+  assert.equal(savedSess.jobDescription, '负责SaaS销售');
+  assert.deepEqual(savedSess.documentIds, ['d1', 'd2']);
+
+  roleDb.deleteDocument('d1');
+  savedSess = roleDb.getSessions().find(s => s.id === 'sess_sales')!;
+  assert.deepEqual(savedSess.documentIds, ['d2'], 'Deleting a document removes it from session.documentIds');
+
+  roleDb.saveSession({...savedSess, documentIds: undefined, updatedAt: 2});
+  savedSess = roleDb.getSessions().find(s => s.id === 'sess_sales')!;
+  assert.equal(savedSess.documentIds, undefined, 'Clearing documentIds back to full-library mode persists cleanly');
+  roleDb.close();
+} finally {
+  fs.rmSync(tmpRoleDbDir, {recursive: true, force: true});
+}
+
+// 4) English question -> Chinese resume & project (.md) retrieval + completion language preservation
+assert.ok(isIdentityOrResumeQuery('Can you introduce yourself?'));
+assert.ok(isIdentityOrResumeQuery('Could you walk me through your resume?'));
+assert.ok(isIdentityOrResumeQuery('What are your biggest strengths?'));
+assert.equal(isIdentityOrResumeQuery('Let me introduce myself first, I am your interviewer today.'), false);
+
+const enWhoAmI = await auditService.retrieve({query: 'Can you introduce yourself?', libraryIds: ['audit']}, [1, 0, 0]);
+assert.ok(enWhoAmI.items.some(i => i.documentId === 'audit_resume'), 'English self-intro recalls Chinese PDF resume');
+
+const enQuantFocus = resolveProjectFocus('What was the quantization bug in your 8295 project?', docs);
+assert.deepEqual(enQuantFocus.documentIds, ['sms']);
+const enQuantRetrieve = await service.retrieve({
+  query: 'What was the quantization bug in your 8295 project?',
+  libraryIds: ['lib'],
+  documentIds: enQuantFocus.documentIds,
+  topK: 2
+});
+assert.ok(enQuantRetrieve.items.some(i => i.text.includes('98.5%')), 'English quantization question hits Chinese 8295 .md case & outcome');
+
+const enTcpUdp = await auditService.retrieve({query: 'What is the difference between TCP and UDP?', libraryIds: ['audit']}, [1, 0, 0]);
+assert.equal(enTcpUdp.items.length, 0, 'English general tech question must not pull personal resume noise');
+
+const preservedEnRewrite = parseCompletionResponse(
+  JSON.stringify({intent: 'project_or_resume', rewrittenQuestion: '介绍一下你的RK3588项目难点', searchQuery: 'RK3588 难点 故障 优化', targetDocIds: ['vision']}),
+  'Tell me about the biggest challenge in your RK3588 project.',
+  new Set(['vision', 'sms'])
+);
+assert.equal(preservedEnRewrite.rewrittenQuestion, 'Tell me about the biggest challenge in your RK3588 project.', 'English question language is preserved even if completion model translated it');
+assert.match(preservedEnRewrite.searchQuery, /RK3588 难点/);
 
 console.log('PASS Project aliases, explicit switch, follow-up scope, ambiguity, whole-case evidence, NFKC, .md authority, library boundary and budget diagnostics');
 

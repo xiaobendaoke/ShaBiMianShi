@@ -6,9 +6,11 @@ import {fileURLToPath} from 'node:url';
 
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 
-export function assertAppStopped(exePath, listProcesses=()=>execFileSync('tasklist',['/FI',`IMAGENAME eq ${path.basename(exePath)}`,'/FO','CSV','/NH'],{encoding:'utf8'})) {
+export function assertAppStopped(exePath, listProcesses) {
+  if (!listProcesses && !fs.existsSync(exePath)) return;
+  const queryProcesses = listProcesses ?? (() => execFileSync('tasklist', ['/FI', `IMAGENAME eq ${path.basename(exePath)}`, '/FO', 'CSV', '/NH'], { encoding: 'utf8' }));
   let processes;
-  try {processes=listProcesses();}
+  try {processes=queryProcesses();}
   catch(error) {
     // tasklist prints an INFO line ("没有运行的任务匹配指定标准。") when nothing matches and may
     // still exit non-zero; that output is a valid empty listing, not a failure to inspect.
