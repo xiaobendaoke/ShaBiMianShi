@@ -35,10 +35,11 @@ jobs:
           npx tsx test/winAppRelease.test.ts
           npx tsx test/interviewWorkflow.test.ts
 
-      - name: Package Windows application & portable ZIP
-        run: |
-          npm run pack:win
-          npm run zip:win
+      - name: Package Windows application (pack:win)
+        run: npm run pack:win
+
+      - name: Create portable Windows ZIP (zip:win)
+        run: npm run zip:win
 
       - name: Verify packaged Windows helper & artifacts
         shell: pwsh

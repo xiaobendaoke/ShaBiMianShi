@@ -43,6 +43,7 @@ try {
   // application and bloats the payload with build tooling.
   const copied = new Set();
   function copyDependency(name, from = root) {
+    if (name.startsWith('@types/')) return;
     let cursor = from, source;
     while (true) {
       const candidate = path.join(cursor, 'node_modules', name);
@@ -106,7 +107,7 @@ try {
     } catch (err) {
       console.warn('Warning: failed to stamp PE metadata via rcedit:', err.message);
     } finally {
-      fs.rmSync(asciiTmp, { recursive: true, force: true });
+      fs.rmSync(asciiTmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   }
 
@@ -116,6 +117,11 @@ try {
   fs.renameSync(manifest + '.tmp', manifest);
   if (previous) console.log('Previous build archived to:', previous);
   console.log('Packaged application:', target);
+} catch (err) {
+  if (process.env.GITHUB_ACTIONS === 'true') {
+    console.log(`::error title=pack-win failed::${String(err?.stack || err).replace(/\r?\n/g, ' | ')}`);
+  }
+  throw err;
 } finally {
   fs.rmSync(staging, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   if (fs.existsSync(release) && !fs.readdirSync(release).length) fs.rmdirSync(release);

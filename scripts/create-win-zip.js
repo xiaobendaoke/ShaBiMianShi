@@ -16,8 +16,24 @@ const filename = `ShaBiMianShi-${pkg.version}-win-${process.arch}-portable.zip`;
 const output = path.join(root, 'release', filename);
 if (fs.existsSync(output)) fs.rmSync(output, { force: true });
 
-const stagingRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'shabimianshi-win-zip-'));
+const stagingParent = path.join(root, 'release');
+fs.mkdirSync(stagingParent, { recursive: true });
+const stagingRoot = fs.mkdtempSync(path.join(stagingParent, '.win-zip-'));
 const appFolder = path.join(stagingRoot, '傻逼面试');
+
+function psQuote(value) {
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+
+function resolvePowerShell() {
+  for (const bin of ['pwsh.exe', 'pwsh', 'powershell.exe']) {
+    try {
+      execFileSync(bin, ['-NoProfile', '-NonInteractive', '-Command', '$PSVersionTable.PSVersion.Major'], { stdio: 'ignore' });
+      return bin;
+    } catch {}
+  }
+  return 'powershell.exe';
+}
 
 try {
   fs.cpSync(unpackedDir, appFolder, { recursive: true });
@@ -38,12 +54,14 @@ try {
   );
 
   const psScript = [
+    '$ErrorActionPreference = "Stop";',
     'Add-Type -AssemblyName System.IO.Compression.FileSystem;',
-    `[System.IO.Compression.ZipFile]::CreateFromDirectory(${JSON.stringify(appFolder)}, ${JSON.stringify(output)}, [System.IO.Compression.CompressionLevel]::Optimal, $true, [System.Text.Encoding]::UTF8)`
+    `[System.IO.Compression.ZipFile]::CreateFromDirectory(${psQuote(appFolder)}, ${psQuote(output)}, [System.IO.Compression.CompressionLevel]::Optimal, $true, [System.Text.Encoding]::UTF8)`
   ].join(' ');
   const encodedCommand = Buffer.from(psScript, 'utf16le').toString('base64');
+  const shellBin = resolvePowerShell();
 
-  execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', encodedCommand], {
+  execFileSync(shellBin, ['-NoProfile', '-NonInteractive', '-EncodedCommand', encodedCommand], {
     stdio: 'inherit'
   });
 
@@ -51,6 +69,11 @@ try {
   fs.writeFileSync(`${output}.sha256`, `${digest}  ${filename}\n`, 'utf8');
   console.log('ZIP:', output);
   console.log('SHA256:', `${digest}  ${filename}`);
+} catch (err) {
+  if (process.env.GITHUB_ACTIONS === 'true') {
+    console.log(`::error title=create-win-zip failed::${String(err?.stack || err).replace(/\r?\n/g, ' | ')}`);
+  }
+  throw err;
 } finally {
-  fs.rmSync(stagingRoot, { recursive: true, force: true });
+  fs.rmSync(stagingRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 }

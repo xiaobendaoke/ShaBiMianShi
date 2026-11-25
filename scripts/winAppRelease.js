@@ -26,6 +26,20 @@ export function assertAppStopped(exePath, listProcesses) {
   if(running)throw Error('新版应用仍在运行，请先完全退出，再执行 npm run pack:win。未覆盖应用资源。');
 }
 
+function renameWithRetry(from, to) {
+  const sleepBuf = new Int32Array(new SharedArrayBuffer(4));
+  for (let attempt = 0; ; attempt++) {
+    try {
+      fs.renameSync(from, to);
+      return;
+    } catch (error) {
+      const transient = error && (error.code === 'EPERM' || error.code === 'EACCES' || error.code === 'EBUSY');
+      if (!transient || attempt >= 15) throw error;
+      Atomics.wait(sleepBuf, 0, 0, 250);
+    }
+  }
+}
+
 // Keep one unpacked Windows build at a fixed path. Previous builds are archived under
 // release/old and stay restorable by hand; user data outside the release tree is untouched.
 export function publishSingleDir(staging,target,{archiveDir=path.join(root,'release/old')}={}) {
@@ -37,9 +51,9 @@ export function publishSingleDir(staging,target,{archiveDir=path.join(root,'rele
   if(fs.existsSync(target)) {
     fs.mkdirSync(archiveDir,{recursive:true});
     previous=path.join(archiveDir,`傻逼面试-旧构建-${Date.now()}-${crypto.randomUUID().slice(0,8)}`);
-    fs.renameSync(target,previous);
+    renameWithRetry(target,previous);
   }
-  try {fs.renameSync(staging,target);}
-  catch(error){if(previous)fs.renameSync(previous,target);throw error;}
+  try {renameWithRetry(staging,target);}
+  catch(error){if(previous)renameWithRetry(previous,target);throw error;}
   return previous;
 }
