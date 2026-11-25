@@ -18,7 +18,8 @@ if (fs.existsSync(output)) fs.rmSync(output, { force: true });
 
 const stagingParent = path.join(root, 'release');
 fs.mkdirSync(stagingParent, { recursive: true });
-const stagingRoot = fs.mkdtempSync(path.join(stagingParent, '.win-zip-'));
+const stagingRoot = fs.mkdtempSync(path.join(stagingParent, 'win-zip-'));
+const asciiFolder = path.join(stagingRoot, 'ShaBiMianShi');
 const appFolder = path.join(stagingRoot, '傻逼面试');
 
 function psQuote(value) {
@@ -36,9 +37,11 @@ function resolvePowerShell() {
 }
 
 try {
-  fs.cpSync(unpackedDir, appFolder, { recursive: true });
+  // Stage into an ASCII directory first to avoid Node 22 Windows fs.cpSync CJK target path bug,
+  // then rename the populated directory to the final Chinese folder name before zipping.
+  fs.cpSync(unpackedDir, asciiFolder, { recursive: true });
   fs.writeFileSync(
-    path.join(appFolder, '使用说明.txt'),
+    path.join(asciiFolder, '使用说明.txt'),
     [
       '【傻逼面试 Windows 免安装版使用说明】',
       '',
@@ -52,6 +55,10 @@ try {
     ].join('\r\n'),
     'utf8'
   );
+  fs.renameSync(asciiFolder, appFolder);
+  if (!fs.existsSync(path.join(appFolder, '傻逼面试.exe'))) {
+    throw new Error('Staged Windows portable folder is missing 傻逼面试.exe');
+  }
 
   const psScript = [
     '$ErrorActionPreference = "Stop";',
