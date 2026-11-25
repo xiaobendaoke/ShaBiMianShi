@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { assertAppStopped, publishSingleDir } from './winAppRelease.js';
 import { buildNativeAudio } from './build-native-audio.js';
@@ -13,18 +14,44 @@ const targetDir = path.join(root, 'release/win-unpacked');
 const target = path.join(targetDir, '傻逼面试.exe');
 assertAppStopped(target);
 
+async function ensureWindowsElectronRuntime(runtimeDir) {
+  const exe = path.join(runtimeDir, 'electron.exe');
+  if (fs.existsSync(exe) && fs.statSync(exe).size > 1024 * 1024) return;
+
+  const electronDir = path.join(root, 'node_modules/electron');
+  const electronReq = createRequire(path.join(electronDir, 'index.js'));
+  const { version } = JSON.parse(fs.readFileSync(path.join(electronDir, 'package.json'), 'utf8'));
+  const checksums = JSON.parse(fs.readFileSync(path.join(electronDir, 'checksums.json'), 'utf8'));
+  const { downloadArtifact } = electronReq('@electron/get');
+
+  console.log(`Downloading verified Electron v${version} runtime for win32-${process.arch}...`);
+  const zipPath = await downloadArtifact({
+    version,
+    artifactName: 'electron',
+    checksums,
+    platform: 'win32',
+    arch: process.arch
+  });
+
+  fs.rmSync(runtimeDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  fs.mkdirSync(runtimeDir, { recursive: true });
+  execFileSync('tar.exe', ['-xf', zipPath, '-C', runtimeDir], { stdio: 'inherit', windowsHide: true });
+  fs.writeFileSync(path.join(electronDir, 'path.txt'), 'electron.exe', 'utf8');
+
+  if (!fs.existsSync(exe) || fs.statSync(exe).size < 1024 * 1024) {
+    const entries = fs.existsSync(runtimeDir) ? fs.readdirSync(runtimeDir).join(', ') : '(missing dir)';
+    throw new Error(`Electron runtime extraction failed; entries in dist: ${entries}`);
+  }
+}
+
 const { icoPath } = ensureIcons();
 buildNativeAudio();
 execFileSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'build'], { cwd: root, stdio: 'inherit', shell: process.platform === 'win32' });
 const { buildId } = JSON.parse(fs.readFileSync(path.join(root, 'dist/build-info.json'), 'utf8'));
 const runtime = path.join(root, 'node_modules/electron/dist');
-const electronInstaller = path.join(root, 'node_modules/electron/install.js');
-if (!fs.existsSync(path.join(runtime, 'electron.exe')) && fs.existsSync(electronInstaller)) {
-  execFileSync(process.execPath, [electronInstaller], { cwd: root, stdio: 'inherit' });
-}
-if (!fs.existsSync(runtime)) throw new Error('Electron runtime is missing');
+await ensureWindowsElectronRuntime(runtime);
 const release = path.join(root, 'release/builds', buildId);
-const staging = path.join(release, '.傻逼面试-staging-win');
+const staging = path.join(release, 'staging-win');
 fs.mkdirSync(release, { recursive: true });
 try {
   fs.rmSync(staging, { recursive: true, force: true });
@@ -68,8 +95,11 @@ try {
   }
   for (const name of Object.keys(pkg.dependencies)) copyDependency(name);
 
+  const rawStagedExe = path.join(staging, 'electron.exe');
+  if (!fs.existsSync(rawStagedExe)) {
+    throw new Error(`Copied runtime missing electron.exe; staging entries: ${fs.readdirSync(staging).join(', ')}`);
+  }
   const stagedExe = path.join(staging, '傻逼面试.exe');
-  fs.renameSync(path.join(staging, 'electron.exe'), stagedExe);
 
   // Stamp Windows PE icon and version metadata in an ASCII temp path so legacy rcedit ANSI argv
   // works reliably even when the repository resides inside a non-ASCII directory.
@@ -79,6 +109,7 @@ try {
     path.join(root, 'node_modules/rcedit/bin/rcedit.exe')
   ];
   const rcedit = rceditCandidates.find(candidate => fs.existsSync(candidate));
+  let stamped = false;
   if (process.platform === 'win32' && rcedit && fs.existsSync(icoPath)) {
     const asciiTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-pe-'));
     try {
@@ -86,7 +117,7 @@ try {
       const tmpExe = path.join(asciiTmp, 'app.exe');
       const tmpIco = path.join(asciiTmp, 'icon.ico');
       fs.copyFileSync(rcedit, tmpRcedit);
-      fs.copyFileSync(stagedExe, tmpExe);
+      fs.copyFileSync(rawStagedExe, tmpExe);
       fs.copyFileSync(icoPath, tmpIco);
       execFileSync(
         tmpRcedit,
@@ -104,12 +135,17 @@ try {
         { stdio: 'inherit', windowsHide: true }
       );
       fs.copyFileSync(tmpExe, stagedExe);
+      stamped = true;
     } catch (err) {
       console.warn('Warning: failed to stamp PE metadata via rcedit:', err.message);
     } finally {
       fs.rmSync(asciiTmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   }
+  if (!stamped) {
+    fs.copyFileSync(rawStagedExe, stagedExe);
+  }
+  fs.rmSync(rawStagedExe, { force: true, maxRetries: 10, retryDelay: 200 });
 
   const previous = publishSingleDir(staging, targetDir);
   const manifest = path.join(root, 'release/latest-build-win.json');

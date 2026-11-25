@@ -23,10 +23,8 @@ jobs:
           node-version: '22'
           cache: 'npm'
 
-      - name: Install dependencies & Electron runtime
-        run: |
-          npm ci
-          node node_modules/electron/install.js
+      - name: Install dependencies
+        run: npm ci
 
       - name: Run core verification tests
         run: |
@@ -74,13 +72,6 @@ jobs:
         run: |
           npm ci
           node node_modules/electron/install.js
-
-      - name: Run core verification tests
-        run: |
-          npx tsx test/spokenAnswer.test.tsx
-          npx tsx test/projectRetrieval.test.ts
-          npx tsx test/macAppRelease.test.ts
-          npx tsx test/interviewWorkflow.test.ts
 
       - name: Package macOS application & DMG
         run: |
