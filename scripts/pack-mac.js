@@ -19,6 +19,10 @@ const { buildId } = JSON.parse(fs.readFileSync(path.join(root, 'dist/build-info.
 const release = path.join(root, 'release/builds', buildId);
 const staging = path.join(release, '.傻逼面试-staging.app');
 const runtime = path.join(root, 'node_modules/electron/dist/Electron.app');
+const electronInstaller = path.join(root, 'node_modules/electron/install.js');
+if (!fs.existsSync(runtime) && fs.existsSync(electronInstaller)) {
+  execFileSync(process.execPath, [electronInstaller], { cwd: root, stdio: 'inherit' });
+}
 if (!fs.existsSync(runtime)) throw new Error('Electron runtime is missing');
 fs.mkdirSync(release, { recursive: true });
 fs.rmSync(staging, { recursive: true, force: true });

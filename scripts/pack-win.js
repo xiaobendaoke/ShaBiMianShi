@@ -18,6 +18,10 @@ buildNativeAudio();
 execFileSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'build'], { cwd: root, stdio: 'inherit', shell: process.platform === 'win32' });
 const { buildId } = JSON.parse(fs.readFileSync(path.join(root, 'dist/build-info.json'), 'utf8'));
 const runtime = path.join(root, 'node_modules/electron/dist');
+const electronInstaller = path.join(root, 'node_modules/electron/install.js');
+if (!fs.existsSync(path.join(runtime, 'electron.exe')) && fs.existsSync(electronInstaller)) {
+  execFileSync(process.execPath, [electronInstaller], { cwd: root, stdio: 'inherit' });
+}
 if (!fs.existsSync(runtime)) throw new Error('Electron runtime is missing');
 const release = path.join(root, 'release/builds', buildId);
 const staging = path.join(release, '.傻逼面试-staging-win');
